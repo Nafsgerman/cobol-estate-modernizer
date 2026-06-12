@@ -1,29 +1,36 @@
 // app/api/admin/setup/route.ts
-// TEMPORARY admin route. Runs on Vercel (where IAM/OIDC auth to Aurora works).
-// Does two things in one deploy:
-//   1. Adds 'dependencies' to the analysis_mode enum (idempotent)
-//   2. Returns the list of estates (id + name) so you can open /estate/<id>
-// DELETE this file after you've used it.
+// TEMPORARY admin/diagnostic route. DELETE after use.
+// Shows each program's source length so we can see if COBOL bodies were seeded.
 import { db, pool } from "@/lib/db";
-import { estate } from "@/lib/db/schema";
+import { estate, program } from "@/lib/db/schema";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 export async function GET() {
   try {
-    // 1. additive enum migration — safe to run repeatedly
+    // ensure enum migration (idempotent)
     await pool.query(
       "ALTER TYPE analysis_mode ADD VALUE IF NOT EXISTS 'dependencies'",
     );
 
-    // 2. list estates
-    const rows = await db.select().from(estate);
+    const estates = await db.select().from(estate);
+    const programs = await db.select().from(program);
+
+    // the key diagnostic: source length per program
+    const programSourceReport = programs.map((p) => ({
+      programId: p.programId,
+      id: p.id,
+      hasSource: Boolean(p.source && p.source.length > 0),
+      sourceLength: p.source?.length ?? 0,
+      lineCount: p.lineCount,
+    }));
 
     return NextResponse.json({
-      migrated: "analysis_mode now includes 'dependencies'",
-      estates: rows,
+      estates,
+      programSourceReport,
     });
   } catch (err) {
     return NextResponse.json(
