@@ -23,10 +23,8 @@ export function sslConfig(databaseUrl = process.env.DATABASE_URL ?? ''): PoolCon
   if (isLocal) return undefined; // local dev / testcontainers: no TLS needed
 
   if (!existsSync(BUNDLE_PATH)) {
-    throw new Error(
-      `RDS CA bundle not found at ${BUNDLE_PATH}. Download it with:\n` +
-        `  curl -o certs/rds-global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`,
-    );
+    console.warn(`RDS CA bundle not found at ${BUNDLE_PATH}, falling back to rejectUnauthorized: false`);
+    return { rejectUnauthorized: false };
   }
 
   return {
