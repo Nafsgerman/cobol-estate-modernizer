@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
+import { sql } from "drizzle-orm";
 
 export const maxDuration = 60;
 
@@ -8,7 +9,7 @@ export async function POST() {
     const { estate, program, dependency } = schema;
 
     // Clear demo data (cascade handles children)
-    await db.delete(estate);
+    await db.execute(sql`TRUNCATE estate CASCADE`);
 
     // Insert estate
     const [e] = await db.insert(estate).values({
