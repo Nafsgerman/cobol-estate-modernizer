@@ -10,7 +10,7 @@ import {
 import { relations, sql } from 'drizzle-orm';
 
 // ---------- enums -----------------------------------------------------------
-export const analysisMode   = pgEnum('analysis_mode',   ['explain', 'modernize', 'assess', 'extract']);
+export const analysisMode = pgEnum('analysis_mode', ['explain', 'modernize', 'assess', 'extract', 'dependencies']);
 export const runStatus      = pgEnum('run_status',      ['pending', 'streaming', 'complete', 'error']);
 export const nodeType       = pgEnum('node_type',       ['program', 'copybook', 'data_element']);
 export const dependencyType = pgEnum('dependency_type', ['call', 'copy', 'uses_data', 'performs', 'reads_file', 'writes_file']);

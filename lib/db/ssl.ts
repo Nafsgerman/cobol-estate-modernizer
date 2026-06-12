@@ -20,15 +20,11 @@ const BUNDLE_PATH =
  */
 export function sslConfig(databaseUrl = process.env.DATABASE_URL ?? ''): PoolConfig['ssl'] {
   const isLocal = /@(localhost|127\.0\.0\.1)/.test(databaseUrl);
-  if (isLocal) return undefined; // local dev / testcontainers: no TLS needed
+  if (isLocal) return undefined;
 
-  if (!existsSync(BUNDLE_PATH)) {
-    console.warn(`RDS CA bundle not found at ${BUNDLE_PATH}, falling back to rejectUnauthorized: false`);
-    return { rejectUnauthorized: false };
-  }
-
-  return {
-    ca: readFileSync(BUNDLE_PATH, 'utf8'),
-    rejectUnauthorized: true, // verify the chain — the point of doing this right
-  };
+  // Aurora endpoints provisioned via the Vercel integration present a PUBLIC
+  // Amazon Trust Services cert (issuer "Amazon RSA 2048 Mxx"), which chains to
+  // a root already in Node's trust store. Verify against system roots; the RDS
+  // private-CA bundle does NOT contain these roots.
+  return { rejectUnauthorized: true };
 }

@@ -1,30 +1,47 @@
-import { NextResponse } from 'next/server'
+// =============================================================================
+// app/api/estate/[id]/graph/route.ts
+// Loads one estate's graph via the proven lineage loaders, derives cycle nodes
+// from the recursive CTE, returns a dagre-laid-out React Flow payload.
+// =============================================================================
+import { NextResponse } from "next/server";
+import { db } from "@/lib/db";
+import {
+  loadEstateGraph,
+  callChainDownstream,
+  type CallChainRow,
+} from "@/lib/db/lineage";
+import { toReactFlow, cycleNodesFromChains } from "@/lib/graph/reactflow";
 
-type GraphNode = {
-  id: string
-}
-
-type GraphEdge = {
-  source: string
-  target: string
-}
-
-type GraphResponse = {
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-}
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs"; // pg + dagre need Node
 
 export async function GET(
-  _request: Request,
+  _req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  // The `id` will be used to load a specific estate's dependency graph later.
-  await params
+  const { id: estateId } = await params;
 
-  const data: GraphResponse = {
-    nodes: [],
-    edges: [],
+  try {
+    const graph = await loadEstateGraph(db, estateId);
+
+    // Cycle source of truth = the CTE. Run the cycle-flagged chain from each
+    // program node and union the is_cycle hits. Cheap at H0 scale.
+    const programIds = graph.nodes
+      .filter((n) => n.type === "program")
+      .map((n) => n.id);
+
+    const chains: CallChainRow[][] = await Promise.all(
+      programIds.map((pid) => callChainDownstream(db, estateId, pid)),
+    );
+    const cycleNodes = cycleNodesFromChains(chains);
+
+    const rf = toReactFlow(graph, cycleNodes);
+    return NextResponse.json(rf, { headers: { "Cache-Control": "no-store" } });
+  } catch (err) {
+    console.error(`[/api/estate/${estateId}/graph] failed:`, err);
+    return NextResponse.json(
+      { error: "Failed to load estate graph." },
+      { status: 500 },
+    );
   }
-
-  return NextResponse.json(data)
 }
