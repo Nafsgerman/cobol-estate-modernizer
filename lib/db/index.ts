@@ -20,7 +20,7 @@ import { Pool, type PoolConfig } from "pg";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 
 import * as schema from "./schema";
-import { RDS_CA_BUNDLE } from "./ssl"; // ⚠️ match this to your ssl.ts export (PEM string)
+import { sslConfig } from "./ssl"; // ⚠️ match this to your ssl.ts export (PEM string)
 
 /* ------------------------------------------------------------------ */
 /* Environment (fail fast, typed)                                      */
@@ -81,11 +81,7 @@ const poolConfig: PoolConfig = {
   database: PGDATABASE,
   port: PGPORT,
   password: authToken, // pg invokes this per new physical connection
-  ssl: {
-    rejectUnauthorized: true, // verify the chain — do NOT loosen
-    ca: RDS_CA_BUNDLE,
-    servername: PGHOST, // SNI + hostname match against the RDS cert
-  },
+  ssl: sslConfig(),
   max: 5, // lean pool; Aurora Serverless v2 scales to 0 ACU
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000,
