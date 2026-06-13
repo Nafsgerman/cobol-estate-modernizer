@@ -1,11 +1,11 @@
 // =============================================================================
-// lib/ai/summarize.ts — deterministic summary projection.
+// lib/ai/summarize.ts — deterministic summary projection + detail reconcile.
 //
 // Single source of truth: the model returns `details` (per-factor evidence);
-// THIS code computes `summary` from it. The headline scorecards are therefore
-// a pure function of the breakdown shown beneath them and cannot diverge.
-// Combined with temperature:0 at the call sites, the same program yields the
-// same verdict every run.
+// THIS code computes the headline `summary` from it AND writes the computed
+// rollups back into `details`, so the scorecard, the structured JSON, and the
+// breakdown factors all show the same numbers. Combined with temperature:0 at
+// the call sites, the same program yields the same verdict every run.
 // =============================================================================
 import { extractJson, type AnalysisMode } from "./core";
 
@@ -119,7 +119,24 @@ export function projectSummary(
 }
 
 /**
- * Parse a JSON-mode response and attach a derived summary.
+ * Write the computed rollups back into `details` so the structured JSON shows
+ * the SAME numbers as the headline scorecards. The breakdown factors are the
+ * ground truth; the rolled-up score is their computed mean, not the model's
+ * free-floating guess. Mutates `details` in place.
+ */
+function reconcileDetails(mode: AnalysisMode, details: Obj, summary: Obj): void {
+  if (mode === "assess") {
+    if (details.readiness && typeof details.readiness === "object") {
+      (details.readiness as Obj).score = summary.readiness_score;
+    }
+    if (details.effort && typeof details.effort === "object") {
+      (details.effort as Obj).total_days = summary.effort_days;
+    }
+  }
+}
+
+/**
+ * Parse a JSON-mode response, attach a derived summary, and reconcile details.
  * Shape stays { mode, summary, details } so the renderer + persistence are
  * unchanged. Falls back to { raw } if the model didn't return parseable JSON.
  */
@@ -128,5 +145,7 @@ export function assembleResult(mode: AnalysisMode, raw: string): Obj {
   if (!parsed || typeof parsed !== "object") return { raw };
   const nested = obj(parsed.details);
   const details = Object.keys(nested).length ? nested : parsed;
-  return { mode, summary: projectSummary(mode, details, obj(parsed.summary)), details };
+  const summary = projectSummary(mode, details, obj(parsed.summary));
+  reconcileDetails(mode, details, summary);
+  return { mode, summary, details };
 }
