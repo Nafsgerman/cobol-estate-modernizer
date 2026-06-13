@@ -25,7 +25,6 @@ import {
   MODEL,
   PROMPT_VERSIONS,
   calculateCost,
-  extractJson,
   extractCodeBlocks,
   stripCodeBlocks,
   validateJava,
@@ -38,6 +37,7 @@ import {
   isJsonMode,
   type GraphContext,
 } from "@/lib/ai/prompts";
+import { assembleResult } from "@/lib/ai/summarize";
 import { checkCobolSyntax, type SyntaxIssue } from "@/lib/cobol/syntax";
 
 export type StreamEvent =
@@ -115,11 +115,13 @@ async function run(
       graph = await buildGraphContext(estateId, programId, prog.programId);
     }
 
-    // 4. Stream the model.
+    // 4. Stream the model. temperature:0 — analytical modes must be
+    //    deterministic; the same program must yield the same verdict.
     const client = anthropic();
     const msg = client.messages.stream({
       model: MODEL,
       max_tokens: 8192,
+      temperature: 0,
       system: systemPrompt(mode),
       messages: [{ role: "user", content: userMessage(mode, source, graph) }],
     });
@@ -134,8 +136,9 @@ async function run(
     const final = await msg.finalMessage();
     const usage = calculateCost(final.usage);
 
-    // 5. Shape result.
-    const result = isJsonMode(mode) ? extractJson(raw) ?? { raw } : shapeModernize(raw);
+    // 5. Shape result. JSON modes: summary is DERIVED from details (single
+    //    source of truth) so the scorecards can't contradict the breakdown.
+    const result = isJsonMode(mode) ? assembleResult(mode, raw) : shapeModernize(raw);
 
     // 6. Persist: close the run, point program at it, write rules/tickets.
     await db

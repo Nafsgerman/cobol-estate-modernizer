@@ -14,7 +14,6 @@ import {
   anthropic,
   MODEL,
   calculateCost,
-  extractJson,
   extractCodeBlocks,
   stripCodeBlocks,
   validateJava,
@@ -22,6 +21,7 @@ import {
   type UsageCost,
 } from "@/lib/ai/core";
 import { systemPrompt, userMessage, isJsonMode } from "@/lib/ai/prompts";
+import { assembleResult } from "@/lib/ai/summarize";
 import { triageSource, type TriageResult } from "@/lib/ai/triage";
 
 export type PlaygroundEvent =
@@ -67,6 +67,7 @@ async function runAnalyze(
     const msg = client.messages.stream({
       model: MODEL,
       max_tokens: 8192,
+      temperature: 0, // deterministic analysis — same paste, same result
       system: systemPrompt(mode),
       messages: [{ role: "user", content: userMessage(mode, source) }],
     });
@@ -81,9 +82,8 @@ async function runAnalyze(
     const final = await msg.finalMessage();
     const usage = calculateCost(final.usage);
 
-    const result = isJsonMode(mode)
-      ? extractJson(raw) ?? { raw }
-      : shapeModernize(raw);
+    // JSON modes: summary derived from details (single source of truth).
+    const result = isJsonMode(mode) ? assembleResult(mode, raw) : shapeModernize(raw);
 
     stream.update({ type: "done", mode, result, usage });
     stream.done();
@@ -141,6 +141,7 @@ async function runFix(
     const msg = client.messages.stream({
       model: MODEL,
       max_tokens: 8192,
+      temperature: 0, // same broken input → same repair
       system: FIX_SYSTEM,
       messages: [
         {
