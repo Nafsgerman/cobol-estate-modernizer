@@ -175,6 +175,7 @@ export function Playground() {
               result={state.result}
               triage={state.triage}
               usage={state.usage}
+              liveText={state.liveText}
             />
           )}
         </section>
@@ -183,32 +184,53 @@ export function Playground() {
   );
 }
 
-// ── Result cockpit (scorecards + detail) ─────────────────────────────
+// ── Result cockpit ───────────────────────────────────────────────────
+// Modernize is a non-JSON mode: it streams markdown (prose + fenced
+// python/java). We render that markdown directly — prose as text, code in
+// labeled panes — instead of JSON-stringifying it (which escapes newlines).
+// The JSON modes (explain/assess/extract) keep scorecards + pretty JSON.
 
 function Result({
   mode,
   result,
   triage,
   usage,
+  liveText,
 }: {
   mode: AnalysisMode | null;
   result: unknown;
   triage: { languageLabel: string; verdict: string } | null;
   usage: { totalTokens: number; totalCostUsd: number } | null;
+  liveText: string;
 }) {
+  const meta = triage ? (
+    <div className="pg__result-meta">
+      {triage.languageLabel} · syntax {triage.verdict}
+      {usage &&
+        ` · ${usage.totalTokens.toLocaleString()} tokens · $${usage.totalCostUsd.toFixed(4)}`}
+    </div>
+  ) : null;
+
+  // ── Modernize: render the streamed markdown, not the escaped object ──
+  if (mode === "modernize") {
+    const md = modernizeText(result, liveText);
+    if (!md.trim()) return null;
+    return (
+      <div className="pg__result">
+        {meta}
+        <ModernizeBody markdown={md} />
+      </div>
+    );
+  }
+
+  // ── JSON modes: scorecards + pretty JSON detail (unchanged) ──
   if (!result || typeof result !== "object") return null;
   const r = result as Record<string, unknown>;
   const summary = (r.summary ?? {}) as Record<string, unknown>;
 
   return (
     <div className="pg__result">
-      {triage && (
-        <div className="pg__result-meta">
-          {triage.languageLabel} · syntax {triage.verdict}
-          {usage &&
-            ` · ${usage.totalTokens.toLocaleString()} tokens · $${usage.totalCostUsd.toFixed(4)}`}
-        </div>
-      )}
+      {meta}
       {"raw" in r && typeof r.raw === "string" ? (
         <pre className="pg__raw">{r.raw}</pre>
       ) : (
@@ -232,6 +254,120 @@ function Result({
     </div>
   );
 }
+
+// Render markdown as prose + labeled code panes.
+function ModernizeBody({ markdown }: { markdown: string }) {
+  const parts = splitMarkdown(markdown);
+  return (
+    <div className="pg__md">
+      {parts.map((p, i) =>
+        p.type === "code" ? (
+          <CodePane key={i} lang={p.lang} code={p.code} />
+        ) : (
+          p.text.trim() && (
+            <div key={i} className="pg__prose" style={PROSE_STYLE}>
+              {p.text.trim()}
+            </div>
+          )
+        ),
+      )}
+    </div>
+  );
+}
+
+function CodePane({ lang, code }: { lang: string; code: string }) {
+  const accent = LANG_ACCENT[lang] ?? "var(--pg-accent, #94a3b8)";
+  return (
+    <div style={CODE_WRAP_STYLE}>
+      <div style={{ ...CODE_HEAD_STYLE, color: accent }}>
+        {lang.toUpperCase()}
+      </div>
+      <pre className="pg__live-text" style={CODE_PRE_STYLE}>
+        {code.replace(/\n+$/, "")}
+      </pre>
+    </div>
+  );
+}
+
+// Prefer the streamed text (ground-truth markdown). Fall back to any string
+// field on the result object, then last-resort stringify.
+function modernizeText(result: unknown, liveText: string): string {
+  if (liveText && liveText.trim()) return liveText;
+  if (typeof result === "string") return result;
+  if (result && typeof result === "object") {
+    const r = result as Record<string, unknown>;
+    for (const k of ["markdown", "text", "content", "raw", "answer", "output", "details"]) {
+      const v = r[k];
+      if (typeof v === "string" && v.trim()) return v;
+    }
+    return JSON.stringify(r, null, 2);
+  }
+  return "";
+}
+
+type MdPart =
+  | { type: "prose"; text: string }
+  | { type: "code"; lang: string; code: string };
+
+function splitMarkdown(md: string): MdPart[] {
+  const parts: MdPart[] = [];
+  const fence = /```([a-zA-Z0-9+#-]*)\n?([\s\S]*?)```/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = fence.exec(md)) !== null) {
+    if (m.index > last) {
+      parts.push({ type: "prose", text: md.slice(last, m.index) });
+    }
+    parts.push({
+      type: "code",
+      lang: (m[1] || "code").toLowerCase(),
+      code: m[2],
+    });
+    last = fence.lastIndex;
+  }
+  if (last < md.length) parts.push({ type: "prose", text: md.slice(last) });
+  return parts;
+}
+
+const LANG_ACCENT: Record<string, string> = {
+  python: "#7dd3fc",
+  java: "#fbbf24",
+  cobol: "#34d399",
+};
+
+const PROSE_STYLE: React.CSSProperties = {
+  whiteSpace: "pre-wrap",
+  lineHeight: 1.65,
+  fontSize: 14,
+  margin: "10px 0",
+  color: "rgba(226,232,240,0.86)",
+};
+
+const CODE_WRAP_STYLE: React.CSSProperties = {
+  marginTop: 12,
+  borderRadius: 10,
+  overflow: "hidden",
+  border: "1px solid rgba(148,163,184,0.16)",
+  background: "rgba(148,163,184,0.04)",
+};
+
+const CODE_HEAD_STYLE: React.CSSProperties = {
+  padding: "7px 13px",
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: "0.09em",
+  fontFamily:
+    "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  background: "rgba(148,163,184,0.07)",
+  borderBottom: "1px solid rgba(148,163,184,0.14)",
+};
+
+const CODE_PRE_STYLE: React.CSSProperties = {
+  margin: 0,
+  borderRadius: 0,
+  border: "none",
+  background: "transparent",
+};
 
 function fmt(v: unknown): string {
   if (typeof v === "boolean") return v ? "Yes" : "No";
