@@ -302,6 +302,51 @@
   overflow-y: auto;
 }
 
+/* ── modernize cockpit ── */
+.pg__mod { display: flex; flex-direction: column; gap: 16px; }
+
+.pg__prose-head {
+  font: 600 10.5px ui-monospace, monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+}
+.pg__prose p {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  font-size: 13.5px;
+  color: var(--text-dim);
+}
+
+.pg__code {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.pg__code-lang {
+  font: 650 10.5px/1 ui-monospace, monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--info);
+  padding: 9px 13px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--info) 5%, var(--surface-2));
+}
+.pg__code pre {
+  margin: 0;
+  padding: 14px;
+  overflow-x: auto;
+  font: 12px/1.55 ui-monospace, "JetBrains Mono", "SF Mono", monospace;
+  white-space: pre;
+  color: var(--text);
+  max-height: 56vh;
+  overflow-y: auto;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pg__pulse, .pg__lang, .pg__blocked, .pg__fixed { animation: none; }
 }
