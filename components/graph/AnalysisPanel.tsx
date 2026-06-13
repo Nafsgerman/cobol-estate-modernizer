@@ -105,9 +105,8 @@ function SyntaxStrip({ issues }: { issues: { severity: string; message: string }
   );
 }
 
-// While streaming: Modernize emits markdown (prose + fenced code) — render it
-// live so the user never sees a wall of ## and ``` . JSON modes stream JSON,
-// which we leave raw until the structured Result takes over on "done".
+// Modernize streams markdown; render it live. JSON modes stream JSON — leave raw
+// until the structured Result takes over on "done".
 function LiveStream({ text, mode }: { text: string; mode: AnalysisMode }) {
   return (
     <div className="live">
@@ -142,7 +141,7 @@ function Result({ mode, result }: { mode: AnalysisMode; result: unknown }) {
     }
   }
 
-  // ── JSON modes (explain/assess/extract/dependencies): scorecards + detail ──
+  // ── JSON modes: scorecards + collapsible structured detail ──
   const summary = (r.summary ?? {}) as Record<string, unknown>;
   const structured = r.details && typeof r.details === "object" ? r.details : null;
 
@@ -176,7 +175,6 @@ function Result({ mode, result }: { mode: AnalysisMode; result: unknown }) {
   );
 }
 
-// Pull the modernize markdown string off the result object, whatever it's keyed as.
 function pickMarkdown(r: Record<string, unknown>): string {
   for (const k of ["analysis", "markdown", "text", "content", "answer", "output"]) {
     const v = r[k];
@@ -185,7 +183,7 @@ function pickMarkdown(r: Record<string, unknown>): string {
   return "";
 }
 
-// ── Markdown renderer: prose + labeled code panes (dependency-free) ──────────
+// ── Markdown renderer: prose (formatted) + labeled code panes ────────────────
 function ModernizeBody({ markdown }: { markdown: string }) {
   const parts = splitMarkdown(markdown);
   return (
@@ -194,11 +192,7 @@ function ModernizeBody({ markdown }: { markdown: string }) {
         p.type === "code" ? (
           <CodePane key={i} lang={p.lang} code={p.code} />
         ) : (
-          p.text.trim() && (
-            <div key={i} className="result__prose" style={PROSE_STYLE}>
-              {p.text.trim()}
-            </div>
-          )
+          p.text.trim() && <MarkdownProse key={i} text={p.text} />
         ),
       )}
     </div>
@@ -215,6 +209,96 @@ function CodePane({ lang, code }: { lang: string; code: string }) {
       </pre>
     </div>
   );
+}
+
+// Lightweight block-level markdown: headings, bullet lists, horizontal rules,
+// paragraphs. Inline bold/code handled by renderInline. No dependency.
+function MarkdownProse({ text }: { text: string }) {
+  const lines = text.replace(/\r/g, "").split("\n");
+  const out: React.ReactNode[] = [];
+  let list: string[] = [];
+  let key = 0;
+
+  const flushList = () => {
+    if (list.length) {
+      const items = [...list];
+      out.push(
+        <ul key={`ul-${key++}`} style={UL_STYLE}>
+          {items.map((li, i) => (
+            <li key={i} style={LI_STYLE}>
+              {renderInline(li)}
+            </li>
+          ))}
+        </ul>,
+      );
+      list = [];
+    }
+  };
+
+  for (const raw of lines) {
+    const t = raw.trim();
+    if (!t) {
+      flushList();
+      continue;
+    }
+    if (/^---+$/.test(t) || /^___+$/.test(t)) {
+      flushList();
+      out.push(<hr key={`hr-${key++}`} style={HR_STYLE} />);
+      continue;
+    }
+    const heading = t.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      flushList();
+      out.push(
+        <div key={`h-${key++}`} style={headingStyle(heading[1].length)}>
+          {renderInline(heading[2])}
+        </div>,
+      );
+      continue;
+    }
+    const bullet = t.match(/^[-*]\s+(.*)$/);
+    if (bullet) {
+      list.push(bullet[1]);
+      continue;
+    }
+    flushList();
+    out.push(
+      <p key={`p-${key++}`} style={P_STYLE}>
+        {renderInline(t)}
+      </p>,
+    );
+  }
+  flushList();
+  return <div className="result__prose">{out}</div>;
+}
+
+// Inline **bold** and `code`.
+function renderInline(s: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  const re = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let k = 0;
+  while ((m = re.exec(s)) !== null) {
+    if (m.index > last) nodes.push(s.slice(last, m.index));
+    const tok = m[0];
+    if (tok.startsWith("**")) {
+      nodes.push(
+        <strong key={k++} style={STRONG_STYLE}>
+          {tok.slice(2, -2)}
+        </strong>,
+      );
+    } else {
+      nodes.push(
+        <code key={k++} style={INLINE_CODE_STYLE}>
+          {tok.slice(1, -1)}
+        </code>,
+      );
+    }
+    last = re.lastIndex;
+  }
+  if (last < s.length) nodes.push(s.slice(last));
+  return nodes;
 }
 
 type MdPart =
@@ -241,12 +325,55 @@ const LANG_ACCENT: Record<string, string> = {
   cobol: "#34d399",
 };
 
-const PROSE_STYLE: React.CSSProperties = {
-  whiteSpace: "pre-wrap",
+function headingStyle(level: number): React.CSSProperties {
+  const sizes = [0, 19, 17, 15, 14, 13, 13];
+  return {
+    fontSize: sizes[level] ?? 14,
+    fontWeight: 600,
+    color: "var(--text, #f1f5f9)",
+    margin: level <= 2 ? "20px 0 8px" : "16px 0 6px",
+    letterSpacing: "-0.01em",
+  };
+}
+
+const P_STYLE: React.CSSProperties = {
   lineHeight: 1.65,
   fontSize: 14,
-  margin: "10px 0",
+  margin: "9px 0",
   color: "rgba(226,232,240,0.86)",
+};
+
+const UL_STYLE: React.CSSProperties = {
+  margin: "8px 0",
+  paddingLeft: 18,
+  listStyle: "disc",
+};
+
+const LI_STYLE: React.CSSProperties = {
+  lineHeight: 1.6,
+  fontSize: 14,
+  margin: "4px 0",
+  color: "rgba(226,232,240,0.86)",
+};
+
+const STRONG_STYLE: React.CSSProperties = {
+  fontWeight: 600,
+  color: "var(--text, #f1f5f9)",
+};
+
+const INLINE_CODE_STYLE: React.CSSProperties = {
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  fontSize: "0.88em",
+  padding: "1px 5px",
+  borderRadius: 5,
+  background: "var(--surface-2, rgba(148,163,184,0.12))",
+  color: "#a5b4fc",
+};
+
+const HR_STYLE: React.CSSProperties = {
+  border: "none",
+  borderTop: "1px solid var(--line, rgba(148,163,184,0.16))",
+  margin: "18px 0",
 };
 
 const CODE_WRAP_STYLE: React.CSSProperties = {
