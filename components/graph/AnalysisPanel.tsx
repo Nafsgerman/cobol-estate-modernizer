@@ -4,6 +4,8 @@ import { useEffect } from "react";
 import type { RFNodeData } from "@/lib/graph/reactflow";
 import type { AnalysisMode } from "@/lib/ai/core";
 import { useAnalysis } from "./useAnalysis";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const MODES: { id: AnalysisMode; label: string; blurb: string }[] = [
   { id: "explain", label: "Explain", blurb: "Purpose, complexity, rules" },
@@ -117,10 +119,14 @@ function LiveStream({ text }: { text: string }) {
 function Result({ mode, result }: { mode: AnalysisMode; result: unknown }) {
   if (!result || typeof result !== "object") return null;
   const r = result as Record<string, unknown>;
+
   if ("raw" in r && typeof r.raw === "string")
     return <pre className="result__raw">{r.raw}</pre>;
 
+  const analysis = typeof r.analysis === "string" ? r.analysis : null;
   const summary = (r.summary ?? {}) as Record<string, unknown>;
+  const structured = r.details && typeof r.details === "object" ? r.details : null;
+
   return (
     <div className="result">
       {Object.keys(summary).length > 0 && (
@@ -133,10 +139,26 @@ function Result({ mode, result }: { mode: AnalysisMode; result: unknown }) {
           ))}
         </div>
       )}
-      <details className="result__detail" open>
-        <summary>Full {mode} output</summary>
-        <pre>{JSON.stringify(r.details ?? r, null, 2)}</pre>
-      </details>
+
+      {analysis && (
+        <div className="result__md">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{analysis}</ReactMarkdown>
+        </div>
+      )}
+
+      {structured && (
+        <details className="result__detail">
+          <summary>Structured data</summary>
+          <pre>{JSON.stringify(structured, null, 2)}</pre>
+        </details>
+      )}
+
+      {!analysis && !structured && (
+        <details className="result__detail" open>
+          <summary>Full {mode} output</summary>
+          <pre>{JSON.stringify(r, null, 2)}</pre>
+        </details>
+      )}
     </div>
   );
 }
