@@ -141,14 +141,12 @@ function Result({ mode, result }: { mode: AnalysisMode; result: unknown }) {
     }
   }
 
-  // ── JSON modes: scorecards + structured cockpit (assess/deps) or JSON ──
+  // ── JSON modes: scorecards + structured cockpit + raw JSON toggle ──
   const summary = (r.summary ?? {}) as Record<string, unknown>;
   const details =
     r.details && typeof r.details === "object"
       ? (r.details as Record<string, unknown>)
       : null;
-
-  const hasCockpit = mode === "assess" || mode === "dependencies";
 
   return (
     <div className="result">
@@ -163,12 +161,14 @@ function Result({ mode, result }: { mode: AnalysisMode; result: unknown }) {
         </div>
       )}
 
+      {details && mode === "explain" && <ExplainCockpit d={details} />}
       {details && mode === "assess" && <AssessCockpit d={details} />}
+      {details && mode === "extract" && <ExtractCockpit d={details} />}
       {details && mode === "dependencies" && <DependenciesCockpit d={details} />}
 
       {details ? (
         <details className="result__detail">
-          <summary>{hasCockpit ? "View raw JSON" : "Structured data"}</summary>
+          <summary>View raw JSON</summary>
           <pre>{JSON.stringify(details, null, 2)}</pre>
         </details>
       ) : (
@@ -189,6 +189,184 @@ function pickMarkdown(r: Record<string, unknown>): string {
     if (typeof v === "string" && v.trim()) return v;
   }
   return "";
+}
+
+// ── Explain cockpit ────────────────────────────────────────────────────────
+function ExplainCockpit({ d }: { d: Record<string, unknown> }) {
+  const purpose = asObj(d.purpose);
+  const tags = Array.isArray(purpose.tags) ? purpose.tags : [];
+  const cx = asObj(d.complexity);
+  const variables = asArr(d.variables);
+  const rules = asArr(d.business_rules);
+
+  const metrics: [string, React.ReactNode][] = [
+    ["Compute statements", n(cx.compute_statements)],
+    ["Perform calls", n(cx.perform_calls)],
+    ["Copybooks", n(cx.copybooks)],
+    ["CICS calls", n(cx.cics_calls)],
+    ["DB2 queries", n(cx.db2_queries)],
+    ["File I/O", cx.file_io ? "Yes" : "No"],
+  ];
+
+  return (
+    <div style={COCKPIT_STYLE}>
+      {(purpose.description || tags.length > 0) && (
+        <Section title="Purpose">
+          {purpose.description ? (
+            <div style={NOTE_STYLE}>{str(purpose.description)}</div>
+          ) : null}
+          {tags.length > 0 && (
+            <div style={{ ...CHIPS_STYLE, marginTop: 8 }}>
+              {tags.map((t, i) => (
+                <span key={i} style={CHIP_STYLE}>
+                  {str(t)}
+                </span>
+              ))}
+            </div>
+          )}
+        </Section>
+      )}
+
+      {Object.keys(cx).length > 0 && (
+        <Section title="Complexity">
+          {metrics.map(([label, val]) => (
+            <KV key={label} label={label} value={val} />
+          ))}
+          {cx.verdict ? <div style={NOTE_STYLE}>{str(cx.verdict)}</div> : null}
+        </Section>
+      )}
+
+      {variables.length > 0 && (
+        <Section title={`Variables (${variables.length})`}>
+          <div style={TABLE_WRAP_STYLE}>
+            <table style={TABLE_STYLE}>
+              <thead>
+                <tr>
+                  <th style={TH_STYLE}>Name</th>
+                  <th style={TH_STYLE}>Picture</th>
+                  <th style={TH_STYLE}>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                {variables.map((v, i) => (
+                  <tr key={i}>
+                    <td style={TD_STYLE}>
+                      <code style={INLINE_CODE_STYLE}>{str(v.name)}</code>
+                    </td>
+                    <td style={TD_STYLE}>
+                      <code style={INLINE_CODE_STYLE}>{str(v.picture)}</code>
+                    </td>
+                    <td style={TD_STYLE}>{str(v.description)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+      )}
+
+      {rules.length > 0 && (
+        <Section title={`Business rules (${rules.length})`}>
+          {rules.map((rl, i) => (
+            <div key={i} style={CARD_STYLE}>
+              <div style={CARD_HEAD_STYLE}>
+                {rl.id ? <span style={ID_BADGE_STYLE}>{str(rl.id)}</span> : null}
+                <CategoryChip category={rl.category} />
+              </div>
+              <div style={STATEMENT_STYLE}>{str(rl.statement)}</div>
+              {rl.location ? <div style={LOCATION_STYLE}>{str(rl.location)}</div> : null}
+            </div>
+          ))}
+        </Section>
+      )}
+    </div>
+  );
+}
+
+// ── Extract cockpit ────────────────────────────────────────────────────────
+function ExtractCockpit({ d }: { d: Record<string, unknown> }) {
+  const rules = asArr(d.rules);
+  const deps = asObj(d.data_dependencies);
+
+  const depGroups: [string, string[]][] = (
+    [
+      ["DB2 tables", deps.db2_tables],
+      ["VSAM files", deps.vsam_files],
+      ["Sequential files", deps.sequential_files],
+      ["Copybooks", deps.copybooks],
+    ] as [string, unknown][]
+  )
+    .map(([label, v]) => [label, depList(v)] as [string, string[]])
+    .filter(([, v]) => v.length > 0);
+
+  return (
+    <div style={COCKPIT_STYLE}>
+      {rules.length > 0 && (
+        <Section title={`Business rules → tickets (${rules.length})`}>
+          {rules.map((rl, i) => {
+            const jt = asObj(rl.jira_ticket);
+            const criteria = Array.isArray(rl.acceptance_criteria)
+              ? rl.acceptance_criteria
+              : [];
+            return (
+              <div key={i} style={CARD_STYLE}>
+                <div style={CARD_HEAD_STYLE}>
+                  {rl.id ? <span style={ID_BADGE_STYLE}>{str(rl.id)}</span> : null}
+                  <PriorityTag level={rl.priority} />
+                  <CategoryChip category={rl.category} />
+                </div>
+                <div style={STATEMENT_STYLE}>{str(rl.statement)}</div>
+                {rl.location ? <div style={LOCATION_STYLE}>{str(rl.location)}</div> : null}
+                {criteria.length > 0 && (
+                  <ul style={{ ...UL_STYLE, marginTop: 8 }}>
+                    {criteria.map((c, j) => (
+                      <li key={j} style={LI_STYLE}>
+                        {str(c)}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {Object.keys(jt).length > 0 && (
+                  <div style={JIRA_STYLE}>
+                    <div style={JIRA_HEAD_STYLE}>
+                      <span style={JIRA_LABEL_STYLE}>JIRA</span>
+                      <span style={JIRA_TITLE_STYLE}>{str(jt.title)}</span>
+                    </div>
+                    <div style={{ ...CHIPS_STYLE, marginTop: 8 }}>
+                      {jt.kind ? <span style={CHIP_STYLE}>{cap(str(jt.kind))}</span> : null}
+                      {jt.story_points != null ? (
+                        <span style={CHIP_STYLE}>{n(jt.story_points)} pts</span>
+                      ) : null}
+                      {jt.priority ? <PriorityTag level={jt.priority} /> : null}
+                    </div>
+                    {jt.body ? <div style={NOTE_STYLE}>{str(jt.body)}</div> : null}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </Section>
+      )}
+
+      {(depGroups.length > 0 || deps.verdict) && (
+        <Section title="Data dependencies">
+          {depGroups.map(([label, items]) => (
+            <div key={label} style={DEP_ROW_STYLE}>
+              <span style={DEP_LABEL_STYLE}>{label}</span>
+              <span style={CHIPS_STYLE}>
+                {items.map((x, i) => (
+                  <code key={i} style={INLINE_CODE_STYLE}>
+                    {x}
+                  </code>
+                ))}
+              </span>
+            </div>
+          ))}
+          {deps.verdict ? <div style={NOTE_STYLE}>{str(deps.verdict)}</div> : null}
+        </Section>
+      )}
+    </div>
+  );
 }
 
 // ── Assess cockpit ───────────────────────────────────────────────────────
@@ -415,6 +593,16 @@ function SevTag({ level }: { level: unknown }) {
   );
 }
 
+function PriorityTag({ level }: { level: unknown }) {
+  const b = prioBand(level);
+  const c = PRIO_COLOR[b];
+  return (
+    <span style={{ ...TAG_STYLE, color: c, borderColor: `${c}66`, background: `${c}1f` }}>
+      {b}
+    </span>
+  );
+}
+
 function RelTag({ rel }: { rel: unknown }) {
   const direct = str(rel).toLowerCase() === "direct";
   const c = direct ? "#7dd3fc" : "#94a3b8";
@@ -422,6 +610,21 @@ function RelTag({ rel }: { rel: unknown }) {
     <span style={{ ...TAG_STYLE, color: c, borderColor: `${c}55`, background: `${c}1a` }}>
       {direct ? "direct" : "transitive"}
     </span>
+  );
+}
+
+function CategoryChip({ category }: { category: unknown }) {
+  const label = str(category).replace(/_/g, " ");
+  if (!label) return null;
+  return <span style={CHIP_STYLE}>{cap(label)}</span>;
+}
+
+function KV({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div style={KV_ROW_STYLE}>
+      <span style={KV_LABEL_STYLE}>{label}</span>
+      <span style={KV_VAL_STYLE}>{value}</span>
+    </div>
   );
 }
 
@@ -635,6 +838,7 @@ const n = (v: unknown): number => {
   const x = typeof v === "number" ? v : Number(v);
   return Number.isFinite(x) ? x : 0;
 };
+const cap = (s: string): string => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 const depList = (v: unknown): string[] =>
   Array.isArray(v)
     ? v.map((x) => (typeof x === "string" ? x : str(asObj(x).name))).filter(Boolean)
@@ -645,8 +849,21 @@ function band(v: unknown): "Low" | "Medium" | "High" {
   if (s.startsWith("med")) return "Medium";
   return "Low";
 }
+function prioBand(v: unknown): "Critical" | "High" | "Medium" | "Low" {
+  const s = str(v).toLowerCase();
+  if (s.startsWith("crit")) return "Critical";
+  if (s.startsWith("high")) return "High";
+  if (s.startsWith("med")) return "Medium";
+  return "Low";
+}
 const SEV_COLOR: Record<string, string> = {
   High: "#f87171",
+  Medium: "#fbbf24",
+  Low: "#34d399",
+};
+const PRIO_COLOR: Record<string, string> = {
+  Critical: "#fb7185",
+  High: "#fb923c",
   Medium: "#fbbf24",
   Low: "#34d399",
 };
@@ -779,6 +996,12 @@ const NOTE_STYLE: React.CSSProperties = {
   color: "rgba(226,232,240,0.7)",
   marginTop: 6,
 };
+const STATEMENT_STYLE: React.CSSProperties = {
+  fontSize: 14,
+  lineHeight: 1.55,
+  color: "var(--text, #e2e8f0)",
+  marginTop: 8,
+};
 const CARD_STYLE: React.CSSProperties = {
   border: "1px solid var(--line, rgba(148,163,184,0.16))",
   borderRadius: 10,
@@ -786,7 +1009,12 @@ const CARD_STYLE: React.CSSProperties = {
   margin: "8px 0",
   background: "var(--surface-2, rgba(148,163,184,0.04))",
 };
-const CARD_HEAD_STYLE: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
+const CARD_HEAD_STYLE: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "wrap",
+};
 const CARD_TITLE_STYLE: React.CSSProperties = {
   fontWeight: 600,
   fontSize: 14,
@@ -801,6 +1029,32 @@ const TAG_STYLE: React.CSSProperties = {
   letterSpacing: "0.02em",
   textTransform: "uppercase",
   whiteSpace: "nowrap",
+};
+const CHIP_STYLE: React.CSSProperties = {
+  fontSize: 11.5,
+  fontWeight: 500,
+  padding: "2px 9px",
+  borderRadius: 999,
+  border: "1px solid var(--line, rgba(148,163,184,0.22))",
+  background: "var(--surface-2, rgba(148,163,184,0.08))",
+  color: "rgba(226,232,240,0.78)",
+  whiteSpace: "nowrap",
+};
+const ID_BADGE_STYLE: React.CSSProperties = {
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  fontSize: 11,
+  fontWeight: 600,
+  padding: "2px 7px",
+  borderRadius: 6,
+  background: "var(--surface-2, rgba(148,163,184,0.12))",
+  color: "#a5b4fc",
+  whiteSpace: "nowrap",
+};
+const LOCATION_STYLE: React.CSSProperties = {
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  fontSize: 12,
+  color: "rgba(226,232,240,0.5)",
+  marginTop: 6,
 };
 const MITIGATION_STYLE: React.CSSProperties = {
   fontSize: 13,
@@ -837,6 +1091,42 @@ const REL_HEAD_STYLE: React.CSSProperties = { display: "flex", alignItems: "cent
 const REL_NAME_STYLE: React.CSSProperties = {
   fontWeight: 600,
   fontSize: 14,
+  color: "var(--text, #f1f5f9)",
+};
+const KV_ROW_STYLE: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  padding: "5px 0",
+  borderBottom: "1px solid var(--line, rgba(148,163,184,0.08))",
+  fontSize: 13.5,
+};
+const KV_LABEL_STYLE: React.CSSProperties = { color: "rgba(226,232,240,0.6)" };
+const KV_VAL_STYLE: React.CSSProperties = {
+  color: "var(--text, #e2e8f0)",
+  fontVariantNumeric: "tabular-nums",
+  fontWeight: 600,
+};
+const JIRA_STYLE: React.CSSProperties = {
+  marginTop: 10,
+  padding: "10px 12px",
+  borderRadius: 8,
+  border: "1px solid var(--line, rgba(148,163,184,0.14))",
+  background: "rgba(125,211,252,0.05)",
+};
+const JIRA_HEAD_STYLE: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
+const JIRA_LABEL_STYLE: React.CSSProperties = {
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: "0.1em",
+  color: "#7dd3fc",
+  border: "1px solid rgba(125,211,252,0.35)",
+  borderRadius: 4,
+  padding: "1px 5px",
+};
+const JIRA_TITLE_STYLE: React.CSSProperties = {
+  fontWeight: 600,
+  fontSize: 13.5,
   color: "var(--text, #f1f5f9)",
 };
 
