@@ -141,9 +141,14 @@ function Result({ mode, result }: { mode: AnalysisMode; result: unknown }) {
     }
   }
 
-  // ── JSON modes: scorecards + collapsible structured detail ──
+  // ── JSON modes: scorecards + structured cockpit (assess/deps) or JSON ──
   const summary = (r.summary ?? {}) as Record<string, unknown>;
-  const structured = r.details && typeof r.details === "object" ? r.details : null;
+  const details =
+    r.details && typeof r.details === "object"
+      ? (r.details as Record<string, unknown>)
+      : null;
+
+  const hasCockpit = mode === "assess" || mode === "dependencies";
 
   return (
     <div className="result">
@@ -158,10 +163,13 @@ function Result({ mode, result }: { mode: AnalysisMode; result: unknown }) {
         </div>
       )}
 
-      {structured ? (
+      {details && mode === "assess" && <AssessCockpit d={details} />}
+      {details && mode === "dependencies" && <DependenciesCockpit d={details} />}
+
+      {details ? (
         <details className="result__detail">
-          <summary>Structured data</summary>
-          <pre>{JSON.stringify(structured, null, 2)}</pre>
+          <summary>{hasCockpit ? "View raw JSON" : "Structured data"}</summary>
+          <pre>{JSON.stringify(details, null, 2)}</pre>
         </details>
       ) : (
         Object.keys(summary).length === 0 && (
@@ -181,6 +189,240 @@ function pickMarkdown(r: Record<string, unknown>): string {
     if (typeof v === "string" && v.trim()) return v;
   }
   return "";
+}
+
+// ── Assess cockpit ───────────────────────────────────────────────────────
+function AssessCockpit({ d }: { d: Record<string, unknown> }) {
+  const readiness = asObj(d.readiness);
+  const breakdown = asArr(readiness.breakdown);
+  const effort = asObj(d.effort);
+  const phases = asArr(effort.phases);
+  const risks = asArr(d.risks);
+  const deps = asObj(d.dependencies);
+
+  const depGroups: [string, string[]][] = (
+    [
+      ["Copybooks", deps.copybooks],
+      ["Called programs", deps.called_programs],
+      ["DB2 tables", deps.db2_tables],
+      ["CICS", deps.cics_transactions],
+      ["Files", deps.files],
+    ] as [string, unknown][]
+  )
+    .map(([label, v]) => [label, depList(v)] as [string, string[]])
+    .filter(([, v]) => v.length > 0);
+
+  return (
+    <div style={COCKPIT_STYLE}>
+      {breakdown.length > 0 && (
+        <Section title="Readiness breakdown">
+          {breakdown.map((f, i) => (
+            <div key={i} style={FACTOR_ROW_STYLE}>
+              <div style={FACTOR_HEAD_STYLE}>
+                <span>{str(f.factor)}</span>
+                <span style={FACTOR_SCORE_STYLE}>{n(f.score)}</span>
+              </div>
+              <ScoreBar score={n(f.score)} />
+              {f.note ? <div style={NOTE_STYLE}>{str(f.note)}</div> : null}
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {phases.length > 0 && (
+        <Section
+          title={`Effort — ${n(effort.total_days)} day${n(effort.total_days) === 1 ? "" : "s"}`}
+        >
+          <div style={TABLE_WRAP_STYLE}>
+            <table style={TABLE_STYLE}>
+              <thead>
+                <tr>
+                  <th style={TH_STYLE}>Phase</th>
+                  <th style={TH_STYLE}>Days</th>
+                  <th style={TH_STYLE}>Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                {phases.map((p, i) => (
+                  <tr key={i}>
+                    <td style={TD_STYLE}>{str(p.phase)}</td>
+                    <td style={TD_STYLE}>{n(p.days)}</td>
+                    <td style={TD_STYLE}>{str(p.description)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+      )}
+
+      {risks.length > 0 && (
+        <Section title="Risks">
+          {risks.map((rk, i) => (
+            <div key={i} style={CARD_STYLE}>
+              <div style={CARD_HEAD_STYLE}>
+                <SevTag level={rk.level} />
+                <span style={CARD_TITLE_STYLE}>{str(rk.title)}</span>
+              </div>
+              {rk.description ? <div style={NOTE_STYLE}>{str(rk.description)}</div> : null}
+              {rk.mitigation ? (
+                <div style={MITIGATION_STYLE}>
+                  <span style={MIT_LABEL_STYLE}>Mitigation</span>
+                  {str(rk.mitigation)}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {(depGroups.length > 0 || deps.verdict) && (
+        <Section title="Dependencies">
+          {depGroups.map(([label, items]) => (
+            <div key={label} style={DEP_ROW_STYLE}>
+              <span style={DEP_LABEL_STYLE}>{label}</span>
+              <span style={CHIPS_STYLE}>
+                {items.map((x, i) => (
+                  <code key={i} style={INLINE_CODE_STYLE}>
+                    {x}
+                  </code>
+                ))}
+              </span>
+            </div>
+          ))}
+          {deps.verdict ? <div style={NOTE_STYLE}>{str(deps.verdict)}</div> : null}
+        </Section>
+      )}
+    </div>
+  );
+}
+
+// ── Dependencies cockpit ───────────────────────────────────────────────────
+function DependenciesCockpit({ d }: { d: Record<string, unknown> }) {
+  const callers = asArr(d.callers);
+  const callees = asArr(d.callees);
+  const cycles = asArr(d.cycles);
+  const impacts = asArr(d.change_impact);
+  const verdict = str(d.verdict);
+
+  const relList = (rows: Record<string, unknown>[]) =>
+    rows.map((c, i) => (
+      <div key={i} style={REL_ROW_STYLE}>
+        <div style={REL_HEAD_STYLE}>
+          <span style={REL_NAME_STYLE}>{str(c.name)}</span>
+          <RelTag rel={c.relationship} />
+        </div>
+        {c.why_it_matters ? <div style={NOTE_STYLE}>{str(c.why_it_matters)}</div> : null}
+      </div>
+    ));
+
+  return (
+    <div style={COCKPIT_STYLE}>
+      {callers.length > 0 && (
+        <Section title={`Callers (${callers.length})`}>{relList(callers)}</Section>
+      )}
+      {callees.length > 0 && (
+        <Section title={`Callees (${callees.length})`}>{relList(callees)}</Section>
+      )}
+
+      {cycles.length > 0 && (
+        <Section title="Cycles">
+          {cycles.map((cy, i) => (
+            <div key={i} style={CARD_STYLE}>
+              <div style={CHIPS_STYLE}>
+                {(Array.isArray(cy.members) ? cy.members : []).map((m, j) => (
+                  <code key={j} style={INLINE_CODE_STYLE}>
+                    {str(m)}
+                  </code>
+                ))}
+              </div>
+              {cy.risk ? <div style={NOTE_STYLE}>{str(cy.risk)}</div> : null}
+              {cy.break_strategy ? (
+                <div style={MITIGATION_STYLE}>
+                  <span style={MIT_LABEL_STYLE}>Break strategy</span>
+                  {str(cy.break_strategy)}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {impacts.length > 0 && (
+        <Section title="Change impact">
+          {impacts.map((im, i) => (
+            <div key={i} style={CARD_STYLE}>
+              <div style={CARD_HEAD_STYLE}>
+                <SevTag level={im.severity} />
+                <span style={CARD_TITLE_STYLE}>{str(im.scenario)}</span>
+              </div>
+              {Array.isArray(im.affected) && im.affected.length > 0 ? (
+                <div style={CHIPS_STYLE}>
+                  {im.affected.map((a, j) => (
+                    <code key={j} style={INLINE_CODE_STYLE}>
+                      {str(a)}
+                    </code>
+                  ))}
+                </div>
+              ) : null}
+              {im.safeguard ? (
+                <div style={MITIGATION_STYLE}>
+                  <span style={MIT_LABEL_STYLE}>Safeguard</span>
+                  {str(im.safeguard)}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {verdict ? (
+        <Section title="Verdict">
+          <div style={NOTE_STYLE}>{verdict}</div>
+        </Section>
+      ) : null}
+    </div>
+  );
+}
+
+// ── Shared cockpit primitives ──────────────────────────────────────────────
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={SECTION_STYLE}>
+      <div style={SECTION_TITLE_STYLE}>{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function ScoreBar({ score }: { score: number }) {
+  const pct = Math.max(0, Math.min(100, score));
+  const color = pct >= 75 ? "#34d399" : pct >= 50 ? "#fbbf24" : "#f87171";
+  return (
+    <div style={BAR_TRACK_STYLE}>
+      <div style={{ ...BAR_FILL_STYLE, width: `${pct}%`, background: color }} />
+    </div>
+  );
+}
+
+function SevTag({ level }: { level: unknown }) {
+  const b = band(level);
+  const c = SEV_COLOR[b];
+  return (
+    <span style={{ ...TAG_STYLE, color: c, borderColor: `${c}66`, background: `${c}1f` }}>
+      {b}
+    </span>
+  );
+}
+
+function RelTag({ rel }: { rel: unknown }) {
+  const direct = str(rel).toLowerCase() === "direct";
+  const c = direct ? "#7dd3fc" : "#94a3b8";
+  return (
+    <span style={{ ...TAG_STYLE, color: c, borderColor: `${c}55`, background: `${c}1a` }}>
+      {direct ? "direct" : "transitive"}
+    </span>
+  );
 }
 
 // ── Markdown renderer: prose (formatted) + labeled code panes ────────────────
@@ -211,8 +453,6 @@ function CodePane({ lang, code }: { lang: string; code: string }) {
   );
 }
 
-// Block-level markdown: headings, tables, bullet lists, rules, paragraphs.
-// Inline bold/code handled by renderInline. No dependency.
 function MarkdownProse({ text }: { text: string }) {
   const lines = text.replace(/\r/g, "").split("\n");
   const out: React.ReactNode[] = [];
@@ -244,7 +484,6 @@ function MarkdownProse({ text }: { text: string }) {
       continue;
     }
 
-    // Table: a header row of pipes followed by a |---|---| separator row.
     if (isTableRow(t) && idx + 1 < lines.length && isTableDivider(lines[idx + 1])) {
       flushList();
       const header = splitRow(t);
@@ -293,14 +532,12 @@ function MarkdownProse({ text }: { text: string }) {
   return <div className="result__prose">{out}</div>;
 }
 
-// ── Table helpers ──
 function isTableRow(line: string): boolean {
   const t = line.trim();
   return t.startsWith("|") && t.endsWith("|") && t.length > 1;
 }
 function isTableDivider(line: string): boolean {
   const t = line.trim();
-  // |---|:--:|---| style rows: only pipes, dashes, colons, spaces, and >=1 dash.
   return isTableRow(t) && /^\|[\s:|-]*\|$/.test(t) && t.includes("-");
 }
 function splitRow(line: string): string[] {
@@ -342,7 +579,6 @@ function MdTable({ header, rows }: { header: string[]; rows: string[][] }) {
   );
 }
 
-// Inline **bold** and `code`.
 function renderInline(s: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   const re = /(\*\*[^*]+\*\*|`[^`]+`)/g;
@@ -389,6 +625,33 @@ function splitMarkdown(md: string): MdPart[] {
   return parts;
 }
 
+// ── data accessors ──
+const asArr = (v: unknown): Record<string, unknown>[] =>
+  Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
+const asObj = (v: unknown): Record<string, unknown> =>
+  v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+const str = (v: unknown): string => (v == null ? "" : String(v));
+const n = (v: unknown): number => {
+  const x = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(x) ? x : 0;
+};
+const depList = (v: unknown): string[] =>
+  Array.isArray(v)
+    ? v.map((x) => (typeof x === "string" ? x : str(asObj(x).name))).filter(Boolean)
+    : [];
+function band(v: unknown): "Low" | "Medium" | "High" {
+  const s = str(v).toLowerCase();
+  if (s.startsWith("high")) return "High";
+  if (s.startsWith("med")) return "Medium";
+  return "Low";
+}
+const SEV_COLOR: Record<string, string> = {
+  High: "#f87171",
+  Medium: "#fbbf24",
+  Low: "#34d399",
+};
+
+// ── styles ──
 const LANG_ACCENT: Record<string, string> = {
   python: "#7dd3fc",
   java: "#fbbf24",
@@ -412,25 +675,14 @@ const P_STYLE: React.CSSProperties = {
   margin: "9px 0",
   color: "rgba(226,232,240,0.86)",
 };
-
-const UL_STYLE: React.CSSProperties = {
-  margin: "8px 0",
-  paddingLeft: 18,
-  listStyle: "disc",
-};
-
+const UL_STYLE: React.CSSProperties = { margin: "8px 0", paddingLeft: 18, listStyle: "disc" };
 const LI_STYLE: React.CSSProperties = {
   lineHeight: 1.6,
   fontSize: 14,
   margin: "4px 0",
   color: "rgba(226,232,240,0.86)",
 };
-
-const STRONG_STYLE: React.CSSProperties = {
-  fontWeight: 600,
-  color: "var(--text, #f1f5f9)",
-};
-
+const STRONG_STYLE: React.CSSProperties = { fontWeight: 600, color: "var(--text, #f1f5f9)" };
 const INLINE_CODE_STYLE: React.CSSProperties = {
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
   fontSize: "0.88em",
@@ -439,7 +691,6 @@ const INLINE_CODE_STYLE: React.CSSProperties = {
   background: "var(--surface-2, rgba(148,163,184,0.12))",
   color: "#a5b4fc",
 };
-
 const HR_STYLE: React.CSSProperties = {
   border: "none",
   borderTop: "1px solid var(--line, rgba(148,163,184,0.16))",
@@ -447,18 +698,12 @@ const HR_STYLE: React.CSSProperties = {
 };
 
 const TABLE_WRAP_STYLE: React.CSSProperties = {
-  margin: "12px 0",
+  margin: "10px 0",
   overflowX: "auto",
   borderRadius: 10,
   border: "1px solid var(--line, rgba(148,163,184,0.16))",
 };
-
-const TABLE_STYLE: React.CSSProperties = {
-  width: "100%",
-  borderCollapse: "collapse",
-  fontSize: 13.5,
-};
-
+const TABLE_STYLE: React.CSSProperties = { width: "100%", borderCollapse: "collapse", fontSize: 13.5 };
 const TH_STYLE: React.CSSProperties = {
   textAlign: "left",
   padding: "9px 12px",
@@ -468,7 +713,6 @@ const TH_STYLE: React.CSSProperties = {
   borderBottom: "1px solid var(--line, rgba(148,163,184,0.18))",
   whiteSpace: "nowrap",
 };
-
 const TD_STYLE: React.CSSProperties = {
   padding: "8px 12px",
   color: "rgba(226,232,240,0.86)",
@@ -484,7 +728,6 @@ const CODE_WRAP_STYLE: React.CSSProperties = {
   border: "1px solid var(--line, rgba(148,163,184,0.16))",
   background: "var(--surface-2, rgba(148,163,184,0.04))",
 };
-
 const CODE_HEAD_STYLE: React.CSSProperties = {
   padding: "7px 13px",
   fontSize: 11,
@@ -494,12 +737,107 @@ const CODE_HEAD_STYLE: React.CSSProperties = {
   background: "var(--surface-2, rgba(148,163,184,0.07))",
   borderBottom: "1px solid var(--line, rgba(148,163,184,0.14))",
 };
-
 const CODE_PRE_STYLE: React.CSSProperties = {
   margin: 0,
   borderRadius: 0,
   border: "none",
   background: "transparent",
+};
+
+const COCKPIT_STYLE: React.CSSProperties = { marginTop: 4 };
+const SECTION_STYLE: React.CSSProperties = { margin: "18px 0" };
+const SECTION_TITLE_STYLE: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 600,
+  letterSpacing: "0.06em",
+  textTransform: "uppercase",
+  color: "rgba(226,232,240,0.55)",
+  margin: "0 0 10px",
+};
+const FACTOR_ROW_STYLE: React.CSSProperties = { margin: "11px 0" };
+const FACTOR_HEAD_STYLE: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  fontSize: 13.5,
+  color: "var(--text, #e2e8f0)",
+  marginBottom: 5,
+};
+const FACTOR_SCORE_STYLE: React.CSSProperties = {
+  fontVariantNumeric: "tabular-nums",
+  color: "rgba(226,232,240,0.65)",
+};
+const BAR_TRACK_STYLE: React.CSSProperties = {
+  height: 6,
+  borderRadius: 999,
+  background: "var(--surface-2, rgba(148,163,184,0.14))",
+  overflow: "hidden",
+};
+const BAR_FILL_STYLE: React.CSSProperties = { height: "100%", borderRadius: 999 };
+const NOTE_STYLE: React.CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.55,
+  color: "rgba(226,232,240,0.7)",
+  marginTop: 6,
+};
+const CARD_STYLE: React.CSSProperties = {
+  border: "1px solid var(--line, rgba(148,163,184,0.16))",
+  borderRadius: 10,
+  padding: "11px 13px",
+  margin: "8px 0",
+  background: "var(--surface-2, rgba(148,163,184,0.04))",
+};
+const CARD_HEAD_STYLE: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
+const CARD_TITLE_STYLE: React.CSSProperties = {
+  fontWeight: 600,
+  fontSize: 14,
+  color: "var(--text, #f1f5f9)",
+};
+const TAG_STYLE: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 600,
+  padding: "2px 8px",
+  borderRadius: 999,
+  border: "1px solid",
+  letterSpacing: "0.02em",
+  textTransform: "uppercase",
+  whiteSpace: "nowrap",
+};
+const MITIGATION_STYLE: React.CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.55,
+  marginTop: 8,
+  color: "rgba(226,232,240,0.82)",
+};
+const MIT_LABEL_STYLE: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 600,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+  color: "#7dd3fc",
+  marginRight: 6,
+};
+const DEP_ROW_STYLE: React.CSSProperties = {
+  display: "flex",
+  gap: 10,
+  alignItems: "baseline",
+  margin: "7px 0",
+  flexWrap: "wrap",
+};
+const DEP_LABEL_STYLE: React.CSSProperties = {
+  fontSize: 12,
+  color: "rgba(226,232,240,0.55)",
+  minWidth: 110,
+};
+const CHIPS_STYLE: React.CSSProperties = { display: "flex", gap: 6, flexWrap: "wrap" };
+const REL_ROW_STYLE: React.CSSProperties = {
+  padding: "9px 0",
+  borderBottom: "1px solid var(--line, rgba(148,163,184,0.10))",
+};
+const REL_HEAD_STYLE: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
+const REL_NAME_STYLE: React.CSSProperties = {
+  fontWeight: 600,
+  fontSize: 14,
+  color: "var(--text, #f1f5f9)",
 };
 
 function fmt(v: unknown): string {
