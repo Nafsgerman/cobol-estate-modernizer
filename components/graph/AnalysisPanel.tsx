@@ -211,8 +211,8 @@ function CodePane({ lang, code }: { lang: string; code: string }) {
   );
 }
 
-// Lightweight block-level markdown: headings, bullet lists, horizontal rules,
-// paragraphs. Inline bold/code handled by renderInline. No dependency.
+// Block-level markdown: headings, tables, bullet lists, rules, paragraphs.
+// Inline bold/code handled by renderInline. No dependency.
 function MarkdownProse({ text }: { text: string }) {
   const lines = text.replace(/\r/g, "").split("\n");
   const out: React.ReactNode[] = [];
@@ -235,17 +235,36 @@ function MarkdownProse({ text }: { text: string }) {
     }
   };
 
-  for (const raw of lines) {
+  for (let idx = 0; idx < lines.length; idx++) {
+    const raw = lines[idx];
     const t = raw.trim();
+
     if (!t) {
       flushList();
       continue;
     }
+
+    // Table: a header row of pipes followed by a |---|---| separator row.
+    if (isTableRow(t) && idx + 1 < lines.length && isTableDivider(lines[idx + 1])) {
+      flushList();
+      const header = splitRow(t);
+      const rows: string[][] = [];
+      let j = idx + 2;
+      while (j < lines.length && isTableRow(lines[j].trim())) {
+        rows.push(splitRow(lines[j].trim()));
+        j++;
+      }
+      out.push(<MdTable key={`tbl-${key++}`} header={header} rows={rows} />);
+      idx = j - 1;
+      continue;
+    }
+
     if (/^---+$/.test(t) || /^___+$/.test(t)) {
       flushList();
       out.push(<hr key={`hr-${key++}`} style={HR_STYLE} />);
       continue;
     }
+
     const heading = t.match(/^(#{1,6})\s+(.*)$/);
     if (heading) {
       flushList();
@@ -256,11 +275,13 @@ function MarkdownProse({ text }: { text: string }) {
       );
       continue;
     }
+
     const bullet = t.match(/^[-*]\s+(.*)$/);
     if (bullet) {
       list.push(bullet[1]);
       continue;
     }
+
     flushList();
     out.push(
       <p key={`p-${key++}`} style={P_STYLE}>
@@ -270,6 +291,55 @@ function MarkdownProse({ text }: { text: string }) {
   }
   flushList();
   return <div className="result__prose">{out}</div>;
+}
+
+// ── Table helpers ──
+function isTableRow(line: string): boolean {
+  const t = line.trim();
+  return t.startsWith("|") && t.endsWith("|") && t.length > 1;
+}
+function isTableDivider(line: string): boolean {
+  const t = line.trim();
+  // |---|:--:|---| style rows: only pipes, dashes, colons, spaces, and >=1 dash.
+  return isTableRow(t) && /^\|[\s:|-]*\|$/.test(t) && t.includes("-");
+}
+function splitRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((c) => c.trim());
+}
+
+function MdTable({ header, rows }: { header: string[]; rows: string[][] }) {
+  const cols = header.length;
+  return (
+    <div style={TABLE_WRAP_STYLE}>
+      <table style={TABLE_STYLE}>
+        <thead>
+          <tr>
+            {header.map((h, i) => (
+              <th key={i} style={TH_STYLE}>
+                {renderInline(h)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, ri) => (
+            <tr key={ri}>
+              {Array.from({ length: cols }).map((_, ci) => (
+                <td key={ci} style={TD_STYLE}>
+                  {renderInline(row[ci] ?? "")}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 // Inline **bold** and `code`.
@@ -374,6 +444,37 @@ const HR_STYLE: React.CSSProperties = {
   border: "none",
   borderTop: "1px solid var(--line, rgba(148,163,184,0.16))",
   margin: "18px 0",
+};
+
+const TABLE_WRAP_STYLE: React.CSSProperties = {
+  margin: "12px 0",
+  overflowX: "auto",
+  borderRadius: 10,
+  border: "1px solid var(--line, rgba(148,163,184,0.16))",
+};
+
+const TABLE_STYLE: React.CSSProperties = {
+  width: "100%",
+  borderCollapse: "collapse",
+  fontSize: 13.5,
+};
+
+const TH_STYLE: React.CSSProperties = {
+  textAlign: "left",
+  padding: "9px 12px",
+  fontWeight: 600,
+  color: "var(--text, #f1f5f9)",
+  background: "var(--surface-2, rgba(148,163,184,0.08))",
+  borderBottom: "1px solid var(--line, rgba(148,163,184,0.18))",
+  whiteSpace: "nowrap",
+};
+
+const TD_STYLE: React.CSSProperties = {
+  padding: "8px 12px",
+  color: "rgba(226,232,240,0.86)",
+  borderBottom: "1px solid var(--line, rgba(148,163,184,0.10))",
+  verticalAlign: "top",
+  lineHeight: 1.55,
 };
 
 const CODE_WRAP_STYLE: React.CSSProperties = {
