@@ -101,23 +101,18 @@ export function EstateGraph({ estateId }: { estateId: string }) {
           {graph.stats.cyclic && (
             <span className="estate__hud-cycle">cycle detected</span>
           )}
-          <EstateQueryPanel
-            estateId={estateId}
-            open={queryOpen}
-            onOpenChange={(o) => {
-              setQueryOpen(o);
-              if (o) setSelected(null);
-            }}
-            onNodeFocus={(id) => {
-              setSelected(id);
-              setQueryOpen(false);
-            }}
-          />
+          <button
+            className="eq-trigger"
+            onClick={() => { setQueryOpen((o) => !o); setSelected(null); }}
+          >
+            <span style={{ fontSize: 15 }}>⌕</span>
+            <span>Query Estate</span>
+          </button>
         </div>
 
         {isEmpty && (
           <div className="graph-status" style={EMPTY_OVERLAY}>
-            No programs in this estate yet — use &quot;+ Add program&quot;.
+            No programs in this estate yet.
           </div>
         )}
 
@@ -151,6 +146,14 @@ export function EstateGraph({ estateId }: { estateId: string }) {
           estateId={estateId}
           onClose={() => setAdding(false)}
           onSaved={loadGraph}
+        />
+      )}
+
+      {queryOpen && (
+        <EstateQueryPanel
+          estateId={estateId}
+          onClose={() => setQueryOpen(false)}
+          onNodeFocus={(id) => { setSelected(id); setQueryOpen(false); }}
         />
       )}
 

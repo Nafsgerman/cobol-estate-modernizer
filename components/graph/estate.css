@@ -439,3 +439,34 @@
 .estate__canvas {
   overflow: hidden;
 }
+
+/* ── eq-panel as flex sibling (not fixed) ── */
+.eq-panel-wrapper {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: 0;
+  overflow: visible;
+  z-index: 20;
+  pointer-events: none;
+}
+.eq-panel-wrapper--open {
+  pointer-events: all;
+}
+
+.eq-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font: 500 12px/1 ui-monospace, monospace;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: border-color 0.15s, color 0.15s;
+}
+.eq-trigger:hover { border-color: var(--info); color: var(--text); }
