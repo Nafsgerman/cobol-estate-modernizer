@@ -42,9 +42,8 @@ export async function POST(
       ? await db
           .select({
             id: businessRule.id,
-            title: businessRule.title,
-            description: businessRule.description,
-            priority: businessRule.priority,
+            statement: businessRule.statement,
+            category: businessRule.category,
           })
           .from(businessRule)
           .where(inArray(businessRule.programId, progIds))
