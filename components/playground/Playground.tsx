@@ -4,10 +4,21 @@
 // Playground — paste any legacy code, one click triages then analyzes.
 // The gate is invisible until it matters: blocking verdict grays the modes
 // and offers a streamed "Fix it" repair pass.
+//
+// Structured rendering is shared with the estate panel via
+// components/analysis/cockpits.tsx — the playground never re-implements a
+// cockpit, so the two surfaces stay identical by construction.
 // =============================================================================
 import { useCallback, useRef, useState } from "react";
 import type { AnalysisMode } from "@/lib/ai/core";
 import { usePlayground } from "./usePlayground";
+import {
+  Cockpit,
+  ModernizeBody,
+  pickMarkdown,
+  fmt,
+  humanize,
+} from "@/components/analysis/cockpits";
 
 const MODES: { id: AnalysisMode; label: string; blurb: string }[] = [
   { id: "explain", label: "Explain", blurb: "Purpose, complexity, rules" },
@@ -60,10 +71,7 @@ export function Playground() {
               <span className="pg__dot pg__dot--g" />
               <span className="pg__editor-name">source</span>
               {state.triage && (
-                <span
-                  className="pg__lang"
-                  data-verdict={state.triage.verdict}
-                >
+                <span className="pg__lang" data-verdict={state.triage.verdict}>
                   {state.triage.languageLabel} · {state.triage.verdict}
                 </span>
               )}
@@ -184,12 +192,11 @@ export function Playground() {
   );
 }
 
-// ── Result cockpit ───────────────────────────────────────────────────
-// Modernize is a non-JSON mode: it streams markdown (prose + fenced
-// python/java). We render that markdown directly — prose as text, code in
-// labeled panes — instead of JSON-stringifying it (which escapes newlines).
-// The JSON modes (explain/assess/extract) keep scorecards + pretty JSON.
-
+// ── Result ────────────────────────────────────────────────────────────
+// Modernize streams markdown (prose + fenced python/java) → ModernizeBody.
+// JSON modes (explain/assess/extract) → surface-owned scorecards on top, then
+// the shared Cockpit. Raw JSON is one collapsed toggle away. All structured
+// rendering is imported from the shared module — nothing is duplicated here.
 function Result({
   mode,
   result,
@@ -211,9 +218,16 @@ function Result({
     </div>
   ) : null;
 
-  // ── Modernize: render the streamed markdown, not the escaped object ──
+  // ── Modernize: prefer the streamed markdown (ground truth), else the result ──
   if (mode === "modernize") {
-    const md = modernizeText(result, liveText);
+    const md =
+      liveText && liveText.trim()
+        ? liveText
+        : result && typeof result === "object"
+          ? pickMarkdown(result as Record<string, unknown>)
+          : typeof result === "string"
+            ? result
+            : "";
     if (!md.trim()) return null;
     return (
       <div className="pg__result">
@@ -223,157 +237,54 @@ function Result({
     );
   }
 
-  // ── JSON modes: scorecards + pretty JSON detail (unchanged) ──
+  // ── JSON modes ──
   if (!result || typeof result !== "object") return null;
   const r = result as Record<string, unknown>;
+
+  if ("raw" in r && typeof r.raw === "string") {
+    return (
+      <div className="pg__result">
+        {meta}
+        <pre className="pg__raw">{r.raw}</pre>
+      </div>
+    );
+  }
+
   const summary = (r.summary ?? {}) as Record<string, unknown>;
+  const details =
+    r.details && typeof r.details === "object"
+      ? (r.details as Record<string, unknown>)
+      : null;
 
   return (
     <div className="pg__result">
       {meta}
-      {"raw" in r && typeof r.raw === "string" ? (
-        <pre className="pg__raw">{r.raw}</pre>
-      ) : (
-        <>
-          {Object.keys(summary).length > 0 && (
-            <div className="pg__cards">
-              {Object.entries(summary).map(([k, v]) => (
-                <div className="pg__card" key={k}>
-                  <div className="pg__card-val">{fmt(v)}</div>
-                  <div className="pg__card-key">{humanize(k)}</div>
-                </div>
-              ))}
+      {Object.keys(summary).length > 0 && (
+        <div className="pg__cards">
+          {Object.entries(summary).map(([k, v]) => (
+            <div className="pg__card" key={k}>
+              <div className="pg__card-val">{fmt(v)}</div>
+              <div className="pg__card-key">{humanize(k)}</div>
             </div>
-          )}
-          <details className="pg__detail" open>
-            <summary>Full {mode} output</summary>
-            <pre>{JSON.stringify(r.details ?? r, null, 2)}</pre>
-          </details>
-        </>
+          ))}
+        </div>
+      )}
+
+      {details && mode && <Cockpit mode={mode} details={details} />}
+
+      {details && (
+        <details className="pg__detail">
+          <summary>View raw JSON</summary>
+          <pre>{JSON.stringify(details, null, 2)}</pre>
+        </details>
+      )}
+
+      {!details && Object.keys(summary).length === 0 && (
+        <details className="pg__detail" open>
+          <summary>Full {mode} output</summary>
+          <pre>{JSON.stringify(r, null, 2)}</pre>
+        </details>
       )}
     </div>
   );
-}
-
-// Render markdown as prose + labeled code panes.
-function ModernizeBody({ markdown }: { markdown: string }) {
-  const parts = splitMarkdown(markdown);
-  return (
-    <div className="pg__md">
-      {parts.map((p, i) =>
-        p.type === "code" ? (
-          <CodePane key={i} lang={p.lang} code={p.code} />
-        ) : (
-          p.text.trim() && (
-            <div key={i} className="pg__prose" style={PROSE_STYLE}>
-              {p.text.trim()}
-            </div>
-          )
-        ),
-      )}
-    </div>
-  );
-}
-
-function CodePane({ lang, code }: { lang: string; code: string }) {
-  const accent = LANG_ACCENT[lang] ?? "var(--pg-accent, #94a3b8)";
-  return (
-    <div style={CODE_WRAP_STYLE}>
-      <div style={{ ...CODE_HEAD_STYLE, color: accent }}>
-        {lang.toUpperCase()}
-      </div>
-      <pre className="pg__live-text" style={CODE_PRE_STYLE}>
-        {code.replace(/\n+$/, "")}
-      </pre>
-    </div>
-  );
-}
-
-// Prefer the streamed text (ground-truth markdown). Fall back to any string
-// field on the result object, then last-resort stringify.
-function modernizeText(result: unknown, liveText: string): string {
-  if (liveText && liveText.trim()) return liveText;
-  if (typeof result === "string") return result;
-  if (result && typeof result === "object") {
-    const r = result as Record<string, unknown>;
-    for (const k of ["markdown", "text", "content", "raw", "answer", "output", "details"]) {
-      const v = r[k];
-      if (typeof v === "string" && v.trim()) return v;
-    }
-    return JSON.stringify(r, null, 2);
-  }
-  return "";
-}
-
-type MdPart =
-  | { type: "prose"; text: string }
-  | { type: "code"; lang: string; code: string };
-
-function splitMarkdown(md: string): MdPart[] {
-  const parts: MdPart[] = [];
-  const fence = /```([a-zA-Z0-9+#-]*)\n?([\s\S]*?)```/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = fence.exec(md)) !== null) {
-    if (m.index > last) {
-      parts.push({ type: "prose", text: md.slice(last, m.index) });
-    }
-    parts.push({
-      type: "code",
-      lang: (m[1] || "code").toLowerCase(),
-      code: m[2],
-    });
-    last = fence.lastIndex;
-  }
-  if (last < md.length) parts.push({ type: "prose", text: md.slice(last) });
-  return parts;
-}
-
-const LANG_ACCENT: Record<string, string> = {
-  python: "#7dd3fc",
-  java: "#fbbf24",
-  cobol: "#34d399",
-};
-
-const PROSE_STYLE: React.CSSProperties = {
-  whiteSpace: "pre-wrap",
-  lineHeight: 1.65,
-  fontSize: 14,
-  margin: "10px 0",
-  color: "rgba(226,232,240,0.86)",
-};
-
-const CODE_WRAP_STYLE: React.CSSProperties = {
-  marginTop: 12,
-  borderRadius: 10,
-  overflow: "hidden",
-  border: "1px solid rgba(148,163,184,0.16)",
-  background: "rgba(148,163,184,0.04)",
-};
-
-const CODE_HEAD_STYLE: React.CSSProperties = {
-  padding: "7px 13px",
-  fontSize: 11,
-  fontWeight: 600,
-  letterSpacing: "0.09em",
-  fontFamily:
-    "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-  background: "rgba(148,163,184,0.07)",
-  borderBottom: "1px solid rgba(148,163,184,0.14)",
-};
-
-const CODE_PRE_STYLE: React.CSSProperties = {
-  margin: 0,
-  borderRadius: 0,
-  border: "none",
-  background: "transparent",
-};
-
-function fmt(v: unknown): string {
-  if (typeof v === "boolean") return v ? "Yes" : "No";
-  if (typeof v === "number") return v.toLocaleString();
-  return String(v);
-}
-function humanize(k: string): string {
-  return k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
