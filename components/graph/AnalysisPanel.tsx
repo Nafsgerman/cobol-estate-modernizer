@@ -83,12 +83,14 @@ export function AnalysisPanel({
       </nav>
 
       <div className="panel__body">
-        <SourceUploadPanel
-          programId={programId}
-          programName={node.label}
-          onSaved={reload}
-      />
-        {state.syntax.length > 0 && <SyntaxStrip issues={state.syntax} />}
+        {state.syntax.some((i) => i.severity === "error") && (
+          <SourceUploadPanel
+            programId={programId}
+            programName={node.label}
+            onSaved={reload}
+          />
+        )}
+        {state.syntax.some((i) => i.severity === "error") && <SyntaxStrip issues={state.syntax} />}
         {state.status === "streaming" && (
           <LiveStream text={state.liveText} mode={mode} />
         )}
