@@ -13,7 +13,8 @@
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx scripts/seed.ts",
     "db:migrate:modes": "tsx scripts/migrate-modes.ts",
-    "seed": "tsx scripts/seed.ts"
+    "seed": "tsx scripts/seed.ts",
+    "check:schema-parity": "tsx scripts/check-schema-parity.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

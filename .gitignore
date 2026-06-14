@@ -16,3 +16,8 @@ node_modules
 .vercel
 certs/*.pem
 .env
+.env
+.env.local
+.env.vercel
+.env.*.local
+*.pem

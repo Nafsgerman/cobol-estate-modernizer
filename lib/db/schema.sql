@@ -7,7 +7,7 @@
 -- =============================================================================
 
 -- ---------- ENUMS (stable domains only) -------------------------------------
-CREATE TYPE analysis_mode    AS ENUM ('explain', 'modernize', 'assess', 'extract');
+CREATE TYPE analysis_mode    AS ENUM ('explain', 'modernize', 'assess', 'extract', 'dependencies');
 CREATE TYPE run_status       AS ENUM ('pending', 'streaming', 'complete', 'error');
 CREATE TYPE node_type        AS ENUM ('program', 'copybook', 'data_element');
 CREATE TYPE dependency_type  AS ENUM ('call', 'copy', 'uses_data', 'performs', 'reads_file', 'writes_file');
