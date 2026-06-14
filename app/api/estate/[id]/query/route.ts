@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { db } from "@/lib/db";
 import { businessRule, program, copybook } from "@/lib/db/schema";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -27,28 +27,29 @@ export async function POST(
   }
 
   try {
-    const [progs, books, rules] = await Promise.all([
-      db.select({ id: program.id, name: program.programId, loc: program.lineCount })
-        .from(program)
-        .where(eq(program.estateId, estateId)),
-      db.select({ id: copybook.id, name: copybook.name })
-        .from(copybook)
-        .where(eq(copybook.estateId, estateId)),
-      db.select({
-        id: businessRule.id,
-        programId: businessRule.programId,
-        title: businessRule.title,
-        description: businessRule.description,
-        priority: businessRule.priority,
-      })
-        .from(businessRule)
-        .where(
-          sql`${businessRule.programId} IN (
-            SELECT id FROM program WHERE estate_id = ${estateId}
-          )`,
-        )
-        .limit(120),
-    ]);
+    const progs = await db
+      .select({ id: program.id, name: program.programId, loc: program.lineCount })
+      .from(program)
+      .where(eq(program.estateId, estateId));
+
+    const books = await db
+      .select({ id: copybook.id, name: copybook.name })
+      .from(copybook)
+      .where(eq(copybook.estateId, estateId));
+
+    const rules = progs.length > 0
+      ? await db
+          .select({
+            id: businessRule.id,
+            programId: businessRule.programId,
+            title: businessRule.title,
+            description: businessRule.description,
+            priority: businessRule.priority,
+          })
+          .from(businessRule)
+          .where(inArray(businessRule.programId, progs.map((p) => p.id)))
+          .limit(120)
+      : [];
 
     const estateContext = JSON.stringify(
       { programs: progs, copybooks: books, rules },
