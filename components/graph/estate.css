@@ -432,3 +432,10 @@
 }
 .source-upload__save:disabled { opacity: 0.4; cursor: not-allowed; }
 .source-upload__hint { font-size: 11px; color: var(--text-faint); }
+/* ── query panel overflow fix ── */
+.estate {
+  overflow: visible;
+}
+.estate__canvas {
+  overflow: hidden;
+}
