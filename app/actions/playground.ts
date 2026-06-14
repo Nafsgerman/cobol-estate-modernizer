@@ -5,8 +5,11 @@
 // One click runs the cascade and streams every stage:
 //   triage_start → triage (Haiku verdict) → [clean/cosmetic] analyzing →
 //   delta… → done.
-// Blocking verdict ends the stream after `triage` — Sonnet NEVER fires on
-// broken input. fixSource streams a Sonnet repair pass returning fixed code.
+// Blocking verdict ends the stream after `triage` UNLESS the caller forces it
+// (user chose "Analyze anyway") — Sonnet never fires on broken input by default.
+// A cachedTriage lets the client skip the Haiku call when the source has not
+// changed since its last verdict, so switching modes is instant and stable.
+// fixSource streams a Sonnet repair pass returning fixed code.
 // Ephemeral: nothing here touches the estate tables.
 // =============================================================================
 import { createStreamableValue, type StreamableValue } from "ai/rsc";
@@ -37,13 +40,21 @@ export interface PlaygroundStream {
   stream: StreamableValue<PlaygroundEvent>;
 }
 
-/** Analyze raw pasted source. Triage gates the expensive call. */
+export interface AnalyzeOptions {
+  /** Reuse a prior verdict for unchanged source — skips the Haiku triage call. */
+  cachedTriage?: TriageResult | null;
+  /** Run analysis even on a blocking verdict (user chose "Analyze anyway"). */
+  force?: boolean;
+}
+
+/** Analyze raw pasted source. Triage gates the expensive call (unless forced). */
 export async function analyzeSource(
   source: string,
   mode: AnalysisMode,
+  opts: AnalyzeOptions = {},
 ): Promise<PlaygroundStream> {
   const stream = createStreamableValue<PlaygroundEvent>();
-  void runAnalyze(source, mode, stream);
+  void runAnalyze(source, mode, stream, opts);
   return { stream: stream.value };
 }
 
@@ -51,14 +62,22 @@ async function runAnalyze(
   source: string,
   mode: AnalysisMode,
   stream: ReturnType<typeof createStreamableValue<PlaygroundEvent>>,
+  opts: AnalyzeOptions,
 ): Promise<void> {
   try {
-    stream.update({ type: "triage_start" });
-    const triage = await triageSource(source);
+    // Reuse the cached verdict if the client still holds one for this source;
+    // otherwise run the Haiku gate. Either way the client gets a `triage` event.
+    let triage: TriageResult;
+    if (opts.cachedTriage) {
+      triage = opts.cachedTriage;
+    } else {
+      stream.update({ type: "triage_start" });
+      triage = await triageSource(source);
+    }
     stream.update({ type: "triage", result: triage });
 
-    if (triage.verdict === "blocking") {
-      stream.done(); // hard gate: expensive model never fires
+    if (triage.verdict === "blocking" && !opts.force) {
+      stream.done(); // hard gate: expensive model never fires (unless forced)
       return;
     }
 

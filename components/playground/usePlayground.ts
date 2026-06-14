@@ -2,8 +2,11 @@
 
 // =============================================================================
 // usePlayground — client state machine for the paste-and-analyze flow.
-// Gate logic lives here: a blocking triage verdict disables the modes until
-// the source is edited (verdict goes stale the moment the code changes).
+// Gate logic: a blocking triage verdict disables the modes until the source is
+// edited (verdict goes stale the moment the code changes) OR the user clicks
+// "Analyze anyway" (force). The verdict is cached per source, so switching modes
+// on unchanged code reuses it instead of re-running triage — which keeps the
+// gate stable (no flip between modes) and avoids a second Haiku call.
 // =============================================================================
 import { useCallback, useRef, useState } from "react";
 import { readStreamableValue } from "ai/rsc";
@@ -18,7 +21,7 @@ import type { TriageResult } from "@/lib/ai/triage";
 export type Phase =
   | "idle"        // nothing run yet, or source edited since last verdict
   | "triaging"    // Haiku gate running
-  | "blocked"     // blocking verdict: modes disabled, Fix offered
+  | "blocked"     // blocking verdict: modes disabled, Fix / Analyze-anyway offered
   | "analyzing"   // Sonnet streaming
   | "fixing"      // repair pass streaming
   | "done"
@@ -49,31 +52,59 @@ const INITIAL: PlaygroundState = {
 export function usePlayground(onFixedCode: (code: string) => void) {
   const [state, setState] = useState<PlaygroundState>(INITIAL);
   const runToken = useRef(0);
+  // Cached verdict for the exact source it was computed on.
+  const triagedRef = useRef<{ source: string; result: TriageResult } | null>(null);
+  // Last mode the user attempted — drives "Analyze anyway".
+  const lastModeRef = useRef<AnalysisMode>("explain");
 
   /** Source changed → any previous verdict is stale; re-arm the modes. */
   const sourceEdited = useCallback(() => {
     runToken.current++;
+    triagedRef.current = null;
     setState(INITIAL);
   }, []);
 
-  const analyze = useCallback(async (source: string, mode: AnalysisMode) => {
-    const mine = ++runToken.current;
-    setState({ ...INITIAL, phase: "triaging" });
-    try {
-      const { stream } = await analyzeSource(source, mode);
-      for await (const ev of readStreamableValue(stream)) {
-        if (mine !== runToken.current || !ev) continue;
-        applyEvent(setState, ev);
+  const analyze = useCallback(
+    async (source: string, mode: AnalysisMode, opts?: { force?: boolean }) => {
+      const force = opts?.force ?? false;
+      lastModeRef.current = mode;
+      // Reuse the cached verdict only if it was computed on this exact source.
+      const cachedTriage =
+        triagedRef.current && triagedRef.current.source === source
+          ? triagedRef.current.result
+          : null;
+
+      const mine = ++runToken.current;
+      setState({ ...INITIAL, phase: "triaging" });
+      try {
+        const { stream } = await analyzeSource(source, mode, {
+          cachedTriage,
+          force,
+        });
+        for await (const ev of readStreamableValue(stream)) {
+          if (mine !== runToken.current || !ev) continue;
+          if (ev.type === "triage") {
+            triagedRef.current = { source, result: ev.result };
+          }
+          applyEvent(setState, ev, { force });
+        }
+      } catch (err) {
+        if (mine !== runToken.current) return;
+        setState((s) => ({
+          ...s,
+          phase: "error",
+          error: err instanceof Error ? err.message : "Analysis failed.",
+        }));
       }
-    } catch (err) {
-      if (mine !== runToken.current) return;
-      setState((s) => ({
-        ...s,
-        phase: "error",
-        error: err instanceof Error ? err.message : "Analysis failed.",
-      }));
-    }
-  }, []);
+    },
+    [],
+  );
+
+  /** Override the gate: run the last-attempted mode despite a blocking verdict. */
+  const analyzeAnyway = useCallback(
+    (source: string) => analyze(source, lastModeRef.current, { force: true }),
+    [analyze],
+  );
 
   const fix = useCallback(
     async (source: string) => {
@@ -90,6 +121,7 @@ export function usePlayground(onFixedCode: (code: string) => void) {
         for await (const ev of readStreamableValue(stream)) {
           if (mine !== runToken.current || !ev) continue;
           if (ev.type === "fixed") {
+            triagedRef.current = null; // fixed code is new source → fresh verdict
             onFixedCode(ev.code);
             setState((s) => ({
               ...s,
@@ -114,12 +146,13 @@ export function usePlayground(onFixedCode: (code: string) => void) {
     [state.triage, onFixedCode],
   );
 
-  return { state, analyze, fix, sourceEdited };
+  return { state, analyze, analyzeAnyway, fix, sourceEdited };
 }
 
 function applyEvent(
   setState: React.Dispatch<React.SetStateAction<PlaygroundState>>,
   ev: PlaygroundEvent,
+  opts?: { force?: boolean },
 ): void {
   switch (ev.type) {
     case "triage_start":
@@ -129,7 +162,9 @@ function applyEvent(
       setState((s) => ({
         ...s,
         triage: ev.result,
-        phase: ev.result.verdict === "blocking" ? "blocked" : s.phase,
+        // Forced runs never gate, even on a blocking verdict.
+        phase:
+          ev.result.verdict === "blocking" && !opts?.force ? "blocked" : s.phase,
       }));
       break;
     case "analyzing":

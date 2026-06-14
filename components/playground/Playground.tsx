@@ -2,8 +2,10 @@
 
 // =============================================================================
 // Playground — paste any legacy code, one click triages then analyzes.
-// The gate is invisible until it matters: blocking verdict grays the modes
-// and offers a streamed "Fix it" repair pass.
+// The gate is advisory: a blocking verdict grays the modes and offers both a
+// streamed "Fix it" repair pass AND an "Analyze anyway" override, so a triage
+// false-positive can never trap valid code. The verdict is cached per source
+// (see usePlayground), so switching modes never re-flips the gate.
 //
 // Structured rendering is shared with the estate panel via
 // components/analysis/cockpits.tsx — the playground never re-implements a
@@ -32,6 +34,16 @@ const PLACEHOLDER = `Paste any legacy program here — COBOL, PL/I, HLASM, JCL �
 The triage agent detects the language and checks the syntax
 before any analysis runs.`;
 
+const ANYWAY_BTN: React.CSSProperties = {
+  padding: "10px 16px",
+  background: "transparent",
+  border: "1px solid var(--line)",
+  borderRadius: 10,
+  color: "var(--text-dim)",
+  cursor: "pointer",
+  font: "600 12.5px ui-monospace, monospace",
+};
+
 export function Playground() {
   const [source, setSource] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -41,7 +53,8 @@ export function Playground() {
     taRef.current?.focus();
   }, []);
 
-  const { state, analyze, fix, sourceEdited } = usePlayground(onFixedCode);
+  const { state, analyze, analyzeAnyway, fix, sourceEdited } =
+    usePlayground(onFixedCode);
 
   const busy =
     state.phase === "triaging" ||
@@ -106,7 +119,7 @@ export function Playground() {
           {blocked && state.triage && (
             <div className="pg__blocked">
               <div className="pg__blocked-head">
-                ✕ Syntax errors — analysis gated
+                ⚠ Possible syntax issues — analysis gated
               </div>
               <ul className="pg__issues">
                 {state.triage.issues.map((i, n) => (
@@ -121,13 +134,23 @@ export function Playground() {
                   </li>
                 ))}
               </ul>
-              <button
-                className="pg__fix"
-                onClick={() => fix(source)}
-                disabled={busy}
-              >
-                ✦ Fix it for me
-              </button>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button
+                  className="pg__fix"
+                  onClick={() => fix(source)}
+                  disabled={busy}
+                >
+                  ✦ Fix it for me
+                </button>
+                <button
+                  type="button"
+                  style={ANYWAY_BTN}
+                  onClick={() => analyzeAnyway(source)}
+                  disabled={busy}
+                >
+                  Analyze anyway →
+                </button>
+              </div>
             </div>
           )}
 

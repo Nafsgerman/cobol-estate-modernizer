@@ -4,6 +4,13 @@
 // source is, and (b) returns a syntax verdict BEFORE any expensive Sonnet
 // analysis runs. This is the cost/latency gate: Sonnet only fires on clean
 // (or user-overridden) input.
+//
+// Determinism: the call runs at temperature 0 so the same source always yields
+// the same verdict — switching analysis modes can never flip a clean program to
+// blocked. The verdict is then RE-DERIVED in code from the per-issue
+// severities (deriveVerdict), so the headline can never disagree with the list
+// of issues actually shown. Same "evidence from the model, verdict from code"
+// contract used for the analysis rollups.
 // =============================================================================
 import { anthropic, extractJson } from "./core";
 
@@ -37,13 +44,24 @@ export interface TriageResult {
 const TRIAGE_SYSTEM = `You are a legacy-code triage agent for mainframe modernization tooling. You receive raw source code of unknown origin. Your job, in order:
 
 1. DETECT the language: cobol, pl1, assembler (HLASM), jcl, rpg, natural, or unknown.
-2. CHECK syntax for that language's real rules. Be precise, not pedantic:
-   - COBOL: GOBACK is CORRECT for subprograms (CALLed programs); STOP RUN is for main programs only. Do not flag GOBACK. Periods after division/section headers ARE required. LINKAGE SECTION + PROCEDURE DIVISION USING is a valid subprogram shape.
+
+2. CHECK syntax for that language's real rules. Be CONSERVATIVE, not pedantic. The bar for "blocking" is high: only flag an issue as blocking if you are CERTAIN the code would fail to compile. When in doubt, do NOT flag it, or flag it as cosmetic. Real legacy code is full of valid constructs that look unusual:
+   - COBOL abbreviated combined conditions are VALID: \`IF A NOT = "X" AND "Y"\` and \`IF A NOT = "X" AND NOT = "Y"\` both implicitly carry the subject A. Do NOT flag these as "missing operand".
+   - GOBACK is CORRECT for subprograms (CALLed programs); STOP RUN is for main programs. Never flag GOBACK.
+   - GO TO is legacy but VALID. It is never blocking — at most a cosmetic/modernization note.
+   - ALTER, level-88s, REDEFINES, OCCURS DEPENDING ON, COMP-3, reference modification — all valid. Do not flag unfamiliar-but-legal syntax.
+   - LINKAGE SECTION + PROCEDURE DIVISION USING is a valid subprogram shape.
+   - Periods: a genuinely missing period that breaks the parse is blocking; if a compiler would accept it (or you are unsure), treat as cosmetic.
    - PL/I: PROC OPTIONS(MAIN) marks the entry; END statements must match.
    - HLASM: column conventions (label col 1, opcode, operands), END required.
-   - JCL: // in col 1-2, EXEC/DD structure. JCL is a job script, not a program — if the user likely wanted program analysis, say so as a cosmetic note.
-3. CLASSIFY each issue: "blocking" = would not compile / structurally broken; "cosmetic" = style, warnings, conventions that do NOT affect analysis quality.
-4. VERDICT: "clean" (no issues), "cosmetic" (only cosmetic issues), "blocking" (any blocking issue).
+   - JCL: // in col 1-2, EXEC/DD structure. JCL is a job script, not a program — if the user likely wanted program analysis, say so as a cosmetic note, not a blocking error.
+
+3. CLASSIFY each issue precisely:
+   - "blocking" = the code structurally would NOT compile (e.g. an IF with no matching END-IF or period that leaves the parse open, a truncated statement).
+   - "cosmetic" = style, obsolescence, conventions, modernization suggestions — anything that does NOT prevent compilation or degrade analysis.
+   Style and obsolescence are ALWAYS cosmetic, never blocking.
+
+4. Report only issues you are confident about. A clean program returns an empty issues array. Do NOT invent issues to look thorough.
 
 Respond ONLY with valid JSON, no markdown, no fences:
 {
@@ -54,6 +72,15 @@ Respond ONLY with valid JSON, no markdown, no fences:
     { "line": 12, "severity": "blocking|cosmetic", "message": "what is wrong", "hint": "how to fix in one line" }
   ]
 }`;
+
+/** Verdict is derived from the issues, never trusted from the model: blocking
+ *  iff at least one issue is severity "blocking"; else cosmetic iff any issue;
+ *  else clean. Guarantees the headline matches the list the user sees. */
+function deriveVerdict(issues: TriageIssue[]): TriageVerdict {
+  if (issues.some((i) => i.severity === "blocking")) return "blocking";
+  if (issues.length > 0) return "cosmetic";
+  return "clean";
+}
 
 /**
  * Run the triage agent. Fast (~1s) and cheap (~$0.002/call on Haiku).
@@ -82,6 +109,7 @@ export async function triageSource(source: string): Promise<TriageResult> {
   const res = await client.messages.create({
     model: TRIAGE_MODEL,
     max_tokens: 1500,
+    temperature: 0, // deterministic verdict — same source, same gate, every time
     system: TRIAGE_SYSTEM,
     messages: [
       {
@@ -113,10 +141,22 @@ export async function triageSource(source: string): Promise<TriageResult> {
     };
   }
 
+  // Normalise issue severities, then derive the verdict from them in code so a
+  // mislabeled model verdict (e.g. "blocking" over only cosmetic issues) can't
+  // gate valid code.
+  const issues: TriageIssue[] = Array.isArray(parsed.issues)
+    ? (parsed.issues as TriageIssue[]).map((i) => ({
+        line: typeof i.line === "number" ? i.line : null,
+        severity: i.severity === "blocking" ? "blocking" : "cosmetic",
+        message: String(i.message ?? "Issue"),
+        hint: String(i.hint ?? ""),
+      }))
+    : [];
+
   return {
     language: (parsed.language as LegacyLanguage) ?? "unknown",
     languageLabel: parsed.languageLabel ?? String(parsed.language ?? "Unknown"),
-    verdict: parsed.verdict as TriageVerdict,
-    issues: Array.isArray(parsed.issues) ? (parsed.issues as TriageIssue[]) : [],
+    verdict: deriveVerdict(issues),
+    issues,
   };
 }
