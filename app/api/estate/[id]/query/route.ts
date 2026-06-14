@@ -7,6 +7,7 @@ import { eq, sql } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 30;
 
 const client = new Anthropic();
 
@@ -18,49 +19,50 @@ export async function POST(
 
   let question: string;
   try {
-    ({ question } = await req.json());
+    const body = await req.json();
+    question = body.question;
     if (!question?.trim()) throw new Error("empty");
   } catch {
     return NextResponse.json({ error: "question is required" }, { status: 400 });
   }
 
-  const [progs, books, rules] = await Promise.all([
-    db.select({ id: program.id, name: program.programId, loc: program.lineCount })
-      .from(program)
-      .where(eq(program.estateId, estateId)),
-    db.select({ id: copybook.id, name: copybook.name })
-      .from(copybook)
-      .where(eq(copybook.estateId, estateId)),
-    db.select({
-      id: businessRule.id,
-      programId: businessRule.programId,
-      title: businessRule.title,
-      description: businessRule.description,
-      priority: businessRule.priority,
-    })
-      .from(businessRule)
-      .where(
-        sql`${businessRule.programId} IN (
-          SELECT id FROM program WHERE estate_id = ${estateId}
-        )`,
-      )
-      .limit(120),
-  ]);
+  try {
+    const [progs, books, rules] = await Promise.all([
+      db.select({ id: program.id, name: program.programId, loc: program.lineCount })
+        .from(program)
+        .where(eq(program.estateId, estateId)),
+      db.select({ id: copybook.id, name: copybook.name })
+        .from(copybook)
+        .where(eq(copybook.estateId, estateId)),
+      db.select({
+        id: businessRule.id,
+        programId: businessRule.programId,
+        title: businessRule.title,
+        description: businessRule.description,
+        priority: businessRule.priority,
+      })
+        .from(businessRule)
+        .where(
+          sql`${businessRule.programId} IN (
+            SELECT id FROM program WHERE estate_id = ${estateId}
+          )`,
+        )
+        .limit(120),
+    ]);
 
-  const estateContext = JSON.stringify(
-    { programs: progs, copybooks: books, rules },
-    null,
-    2,
-  );
+    const estateContext = JSON.stringify(
+      { programs: progs, copybooks: books, rules },
+      null,
+      2,
+    );
 
-  const systemPrompt = `You are an expert COBOL estate analyst. Answer the user's question concisely and accurately based only on the provided estate data. Return a JSON object with:
+    const systemPrompt = `You are an expert COBOL estate analyst. Answer the user's question concisely and accurately based only on the provided estate data. Return a JSON object with:
 - "answer": string — your direct answer (1-3 paragraphs max)
 - "references": array of { "type": "program"|"copybook"|"rule", "id": string, "name": string } — relevant items from the estate (max 8)
 - "confidence": "high"|"medium"|"low"
 
 Return ONLY valid JSON, no markdown fences, no preamble.`;
 
-  try {
     const response = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1024,
@@ -83,10 +85,7 @@ Return ONLY valid JSON, no markdown fences, no preamble.`;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      return NextResponse.json(
-        { error: "Model returned invalid JSON", raw },
-        { status: 502 },
-      );
+      return NextResponse.json({ error: "Model returned invalid JSON", raw }, { status: 502 });
     }
 
     return NextResponse.json({
@@ -97,7 +96,8 @@ Return ONLY valid JSON, no markdown fences, no preamble.`;
       },
     });
   } catch (err) {
-    console.error(`[/api/estate/${estateId}/query] failed:`, err);
-    return NextResponse.json({ error: "Query failed" }, { status: 500 });
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[/api/estate/${estateId}/query] failed:`, msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
