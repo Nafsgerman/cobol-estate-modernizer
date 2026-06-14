@@ -1,14 +1,10 @@
 "use server";
 
-// =============================================================================
-// app/actions/estate-source.ts — update a program's source in Aurora.
-// Runs triage first; only persists if verdict is clean or cosmetic.
-// Blocking source is rejected — same gate as the playground.
-// =============================================================================
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { program } from "@/lib/db/schema";
 import { triageSource, type TriageResult } from "@/lib/ai/triage";
+import { sql } from "drizzle-orm";
 
 export interface UpdateSourceResult {
   ok: boolean;
@@ -33,6 +29,16 @@ export async function updateProgramSource(
     .update(program)
     .set({ source: trimmed, lineCount })
     .where(eq(program.id, programId));
+
+  // Verify the write landed — read back immediately
+  const [updated] = await db
+    .select({ id: program.id, lineCount: program.lineCount })
+    .from(program)
+    .where(eq(program.id, programId));
+
+  if (!updated) {
+    return { ok: false, triage, error: "Write verification failed — program not found." };
+  }
 
   return { ok: true, triage };
 }

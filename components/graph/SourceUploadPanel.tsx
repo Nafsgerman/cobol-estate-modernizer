@@ -1,10 +1,5 @@
 "use client";
 
-// =============================================================================
-// SourceUploadPanel — paste new/corrected COBOL source for an estate program.
-// Shown inside AnalysisPanel when source is missing or pre-flight has errors.
-// Runs triage on paste; only allows save on clean/cosmetic verdict.
-// =============================================================================
 import { useState, useCallback, useRef } from "react";
 import { updateProgramSource } from "@/app/actions/estate-source";
 import type { TriageResult } from "@/lib/ai/triage";
@@ -15,7 +10,7 @@ interface Props {
   onSaved: () => void;
 }
 
-type Phase = "idle" | "triaging" | "ready" | "saving" | "error";
+type Phase = "idle" | "saving" | "error";
 
 export function SourceUploadPanel({ programId, programName, onSaved }: Props) {
   const [open, setOpen] = useState(false);
@@ -38,17 +33,16 @@ export function SourceUploadPanel({ programId, programName, onSaved }: Props) {
     setError(null);
     try {
       const result = await updateProgramSource(programId, source);
+      setTriage(result.triage);
       if (!result.ok) {
-        setTriage(result.triage);
         setPhase("error");
         setError(result.error ?? "Save failed.");
         return;
       }
-      setTriage(result.triage);
-      setPhase("idle");
       setOpen(false);
       reset();
-      onSaved();
+      // Delay reload by 800ms to let Aurora propagate the write
+      setTimeout(() => onSaved(), 800);
     } catch (e) {
       setPhase("error");
       setError(e instanceof Error ? e.message : "Save failed.");
@@ -73,8 +67,8 @@ export function SourceUploadPanel({ programId, programName, onSaved }: Props) {
     );
   }
 
-  const busy = phase === "triaging" || phase === "saving";
-  const canSave = source.trim().length > 0 && !busy && phase !== "error";
+  const busy = phase === "saving";
+  const canSave = source.trim().length > 0 && !busy;
 
   return (
     <div className="source-upload">
@@ -94,7 +88,7 @@ export function SourceUploadPanel({ programId, programName, onSaved }: Props) {
         onChange={(e) => handleChange(e.target.value)}
       />
 
-      {triage && (
+      {triage && phase === "error" && (
         <div className="source-upload__triage" data-verdict={triage.verdict}>
           {triage.languageLabel} · {triage.verdict}
           {triage.issues.length > 0 && (
@@ -120,7 +114,7 @@ export function SourceUploadPanel({ programId, programName, onSaved }: Props) {
           {phase === "saving" ? "Saving…" : "Save to Aurora →"}
         </button>
         <span className="source-upload__hint">
-          Triage runs on save — blocking syntax is rejected.
+          Triage-gated · blocking syntax rejected
         </span>
       </div>
     </div>
