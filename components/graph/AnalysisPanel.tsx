@@ -8,7 +8,7 @@
 // playground so the two surfaces can never drift apart.
 // This file owns only the panel shell, the live stream, and the Result wiring.
 // =============================================================================
-import { useEffect } from "react";
+import { useEffect, useCallback } from "react";
 import type { RFNodeData } from "@/lib/graph/reactflow";
 import type { AnalysisMode } from "@/lib/ai/core";
 import { useAnalysis } from "./useAnalysis";
