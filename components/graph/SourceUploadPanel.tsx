@@ -1,0 +1,128 @@
+"use client";
+
+// =============================================================================
+// SourceUploadPanel — paste new/corrected COBOL source for an estate program.
+// Shown inside AnalysisPanel when source is missing or pre-flight has errors.
+// Runs triage on paste; only allows save on clean/cosmetic verdict.
+// =============================================================================
+import { useState, useCallback, useRef } from "react";
+import { updateProgramSource } from "@/app/actions/estate-source";
+import type { TriageResult } from "@/lib/ai/triage";
+
+interface Props {
+  programId: string;
+  programName: string;
+  onSaved: () => void;
+}
+
+type Phase = "idle" | "triaging" | "ready" | "saving" | "error";
+
+export function SourceUploadPanel({ programId, programName, onSaved }: Props) {
+  const [open, setOpen] = useState(false);
+  const [source, setSource] = useState("");
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [triage, setTriage] = useState<TriageResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  const reset = useCallback(() => {
+    setSource("");
+    setPhase("idle");
+    setTriage(null);
+    setError(null);
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    if (!source.trim()) return;
+    setPhase("saving");
+    setError(null);
+    try {
+      const result = await updateProgramSource(programId, source);
+      if (!result.ok) {
+        setTriage(result.triage);
+        setPhase("error");
+        setError(result.error ?? "Save failed.");
+        return;
+      }
+      setTriage(result.triage);
+      setPhase("idle");
+      setOpen(false);
+      reset();
+      onSaved();
+    } catch (e) {
+      setPhase("error");
+      setError(e instanceof Error ? e.message : "Save failed.");
+    }
+  }, [programId, source, reset, onSaved]);
+
+  const handleChange = useCallback((val: string) => {
+    setSource(val);
+    setPhase("idle");
+    setTriage(null);
+    setError(null);
+  }, []);
+
+  if (!open) {
+    return (
+      <button
+        className="source-upload__trigger"
+        onClick={() => { setOpen(true); setTimeout(() => taRef.current?.focus(), 50); }}
+      >
+        ↑ Update source
+      </button>
+    );
+  }
+
+  const busy = phase === "triaging" || phase === "saving";
+  const canSave = source.trim().length > 0 && !busy && phase !== "error";
+
+  return (
+    <div className="source-upload">
+      <div className="source-upload__head">
+        <span>Update source — {programName}</span>
+        <button className="source-upload__cancel" onClick={() => { setOpen(false); reset(); }}>
+          ✕
+        </button>
+      </div>
+
+      <textarea
+        ref={taRef}
+        className="source-upload__editor"
+        value={source}
+        placeholder={`Paste corrected COBOL source for ${programName}…`}
+        spellCheck={false}
+        onChange={(e) => handleChange(e.target.value)}
+      />
+
+      {triage && (
+        <div className="source-upload__triage" data-verdict={triage.verdict}>
+          {triage.languageLabel} · {triage.verdict}
+          {triage.issues.length > 0 && (
+            <ul className="source-upload__issues">
+              {triage.issues.map((i, n) => (
+                <li key={n} data-sev={i.severity}>
+                  {i.line ? `L${i.line} ` : ""}{i.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {error && <div className="source-upload__error">{error}</div>}
+
+      <div className="source-upload__actions">
+        <button
+          className="source-upload__save"
+          disabled={!canSave}
+          onClick={handleSave}
+        >
+          {phase === "saving" ? "Saving…" : "Save to Aurora →"}
+        </button>
+        <span className="source-upload__hint">
+          Triage runs on save — blocking syntax is rejected.
+        </span>
+      </div>
+    </div>
+  );
+}

@@ -19,6 +19,7 @@ import {
   fmt,
   humanize,
 } from "@/components/analysis/cockpits";
+import { SourceUploadPanel } from "./SourceUploadPanel";
 
 const MODES: { id: AnalysisMode; label: string; blurb: string }[] = [
   { id: "explain", label: "Explain", blurb: "Purpose, complexity, rules" },
@@ -46,6 +47,10 @@ export function AnalysisPanel({
   onClose,
 }: Props) {
   const { state, run } = useAnalysis();
+
+  const reload = useCallback(() => {
+    run(estateId, programId, mode);
+  }, [estateId, programId, mode, run]);
 
   useEffect(() => {
     run(estateId, programId, mode);
@@ -78,6 +83,11 @@ export function AnalysisPanel({
       </nav>
 
       <div className="panel__body">
+        <SourceUploadPanel
+          programId={programId}
+          programName={node.label}
+          onSaved={reload}
+      />
         {state.syntax.length > 0 && <SyntaxStrip issues={state.syntax} />}
         {state.status === "streaming" && (
           <LiveStream text={state.liveText} mode={mode} />
