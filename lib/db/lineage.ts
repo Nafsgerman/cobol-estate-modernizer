@@ -2,9 +2,15 @@
 // db/lineage.ts — recursive call-chain traversal (the demo centerpiece)
 // Raw SQL via Drizzle for the recursive CTE; cycle-safe via path array.
 // Works identically on Aurora PG16 and Lakebase PG16.
+//
+// Every query is wrapped in withDbRetry: under Aurora Serverless v2 autoscaling
+// a pooled connection can be closed mid-idle, and the graph route fires a burst
+// of these in parallel against a cold pool. One transparent retry evicts the
+// dead client and re-runs on a fresh connection instead of surfacing a 500.
 // =============================================================================
 import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { withDbRetry } from './index';
 
 export interface CallChainRow {
   program_id: string;
@@ -25,7 +31,8 @@ export async function callChainDownstream(
   rootProgramId: string,
   maxDepth = 25,
 ): Promise<CallChainRow[]> {
-  const res = await db.execute(sql`
+  const res = await withDbRetry(() =>
+    db.execute(sql`
     WITH RECURSIVE chain AS (
       SELECT
         p.id                AS program_id,
@@ -58,7 +65,8 @@ export async function callChainDownstream(
     SELECT program_id, program_name, depth, path, is_cycle
     FROM chain
     ORDER BY depth, program_name;
-  `);
+  `),
+  );
   return res.rows as CallChainRow[];
 }
 
@@ -68,15 +76,19 @@ export interface GraphEdge { source: string; target: string; kind: string }
 
 /** One round-trip payload for the D3 force-graph. */
 export async function loadEstateGraph(db: NodePgDatabase<any>, estateId: string) {
-  const nodes = await db.execute(sql`
+  const nodes = await withDbRetry(() =>
+    db.execute(sql`
     SELECT id, 'program'::text  AS type, program_id AS label FROM program  WHERE estate_id = ${estateId}
     UNION ALL
     SELECT id, 'copybook'::text AS type, name       AS label FROM copybook WHERE estate_id = ${estateId}
-  `);
-  const edges = await db.execute(sql`
+  `),
+  );
+  const edges = await withDbRetry(() =>
+    db.execute(sql`
     SELECT source_id AS source, target_id AS target, kind::text AS kind
     FROM dependency WHERE estate_id = ${estateId}
-  `);
+  `),
+  );
   return {
     nodes: nodes.rows as GraphNode[],
     edges: edges.rows as GraphEdge[],
@@ -85,11 +97,13 @@ export async function loadEstateGraph(db: NodePgDatabase<any>, estateId: string)
 
 /** Rules for a clicked node — drives "click node -> its extracted rules". */
 export async function rulesForProgram(db: NodePgDatabase<any>, programId: string) {
-  const res = await db.execute(sql`
+  const res = await withDbRetry(() =>
+    db.execute(sql`
     SELECT id, statement, category, location, confidence
     FROM business_rule
     WHERE program_id = ${programId}
     ORDER BY category, confidence DESC NULLS LAST
-  `);
+  `),
+  );
   return res.rows;
 }

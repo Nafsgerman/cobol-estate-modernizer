@@ -8,6 +8,13 @@
  * Stricter than the Marketplace default (`rejectUnauthorized: false`), so the DB hop
  * is protected against MITM. This is the security differentiator for the estate graph.
  *
+ * Resilience: Aurora Serverless v2 scales toward 0 ACU and recycles idle
+ * connections. A pooled socket the server already closed surfaces as
+ * "Connection terminated unexpectedly"; a cold resume can exceed the connect
+ * timeout as "Connection terminated due to connection timeout". We defend with
+ * keepAlive, an idle timeout below Aurora's server-side cutoff, a pool error
+ * handler that evicts dead clients, and `withDbRetry` on the read paths.
+ *
  * Credential source:
  *   - On Vercel  → awsCredentialsProvider (OIDC web-identity token, zero config)
  *   - Local / CI → AWS default provider chain (env vars / SSO / shared profile)
@@ -83,8 +90,14 @@ const poolConfig: PoolConfig = {
   password: authToken, // pg invokes this per new physical connection
   ssl: sslConfig(),
   max: 5, // lean pool; Aurora Serverless v2 scales to 0 ACU
-  idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 10_000,
+  // Recycle idle clients *before* Aurora's server-side idle cutoff, so pg closes
+  // the socket rather than handing out one the server already killed.
+  idleTimeoutMillis: 10_000,
+  // Cold resume from low/zero ACU + TLS + IAM handshake can exceed 10s.
+  connectionTimeoutMillis: 15_000,
+  // Keep active sockets warm so NAT/proxy idle reaping doesn't silently drop them.
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 5_000,
 };
 
 declare global {
@@ -94,14 +107,88 @@ declare global {
 
 function createPool(): Pool {
   const p = new Pool(poolConfig);
+  // An idle client killed by Aurora (scaling event, idle reap) emits 'error' on
+  // the pool. pg has already removed it; without a listener the event is
+  // unhandled and can crash the function. Log and let the pool move on.
+  p.on("error", (err) => {
+    console.error("[db pool] idle client error (evicted):", err.message);
+  });
   attachDatabasePool(p); // let Vercel drain in-flight queries on suspend
   return p;
 }
 
+// Reuse one pool per instance. Assigned unconditionally (not dev-only) so a
+// module re-evaluation in production can never leak a second pool.
 export const pool: Pool = globalThis.__cobolEstatePool ?? createPool();
+globalThis.__cobolEstatePool = pool;
 
-if (process.env.NODE_ENV !== "production") {
-  globalThis.__cobolEstatePool = pool; // avoid pool leaks on dev HMR
+/* ------------------------------------------------------------------ */
+/* Retry wrapper — connection-class failures only                      */
+/* ------------------------------------------------------------------ */
+
+// Transient connection failures (stale pooled socket, cold-resume timeout).
+// SQL/logic errors (e.g. 42703 undefined_column) are NOT here — they must fail
+// fast, never retry.
+const RETRYABLE_MESSAGES = [
+  "Connection terminated unexpectedly",
+  "Connection terminated due to connection timeout",
+  "timeout exceeded when trying to connect",
+  "Client has encountered a connection error",
+  "server closed the connection unexpectedly",
+];
+const RETRYABLE_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EPIPE",
+  "ECONNREFUSED",
+  "57P01", // admin_shutdown
+  "08000", // connection_exception
+  "08001", // sqlclient_unable_to_establish_sqlconnection
+  "08003", // connection_does_not_exist
+  "08006", // connection_failure
+]);
+
+function isRetryable(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const code = (err as { code?: string }).code;
+  if (code && RETRYABLE_CODES.has(code)) return true;
+  const msg = (err as { message?: string }).message ?? "";
+  // Also unwrap pg's wrapped driver error (err.cause) seen in route logs.
+  const causeMsg =
+    (err as { cause?: { message?: string } }).cause?.message ?? "";
+  return RETRYABLE_MESSAGES.some(
+    (m) => msg.includes(m) || causeMsg.includes(m),
+  );
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Run a DB operation with a small number of retries on connection-class errors.
+ * The first failed attempt evicts the dead client from the pool, so the next
+ * attempt acquires (or establishes) a fresh connection. Backoff also gives a
+ * cold Aurora instance a moment to finish resuming.
+ */
+export async function withDbRetry<T>(
+  fn: () => Promise<T>,
+  attempts = 3,
+): Promise<T> {
+  const backoff = [200, 600]; // ms before retries 2 and 3
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i === attempts - 1 || !isRetryable(err)) throw err;
+      console.warn(
+        `[db] retryable error (attempt ${i + 1}/${attempts}), retrying:`,
+        (err as { message?: string }).message,
+      );
+      await sleep(backoff[i] ?? 600);
+    }
+  }
+  throw lastErr;
 }
 
 /* ------------------------------------------------------------------ */
