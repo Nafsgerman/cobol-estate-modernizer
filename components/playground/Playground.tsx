@@ -14,6 +14,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { AnalysisMode } from "@/lib/ai/core";
 import { usePlayground } from "./usePlayground";
+import { saveProgramToEstate } from "@/app/actions/estate-write";
 import {
   Cockpit,
   ModernizeBody,
@@ -21,6 +22,10 @@ import {
   fmt,
   humanize,
 } from "@/components/analysis/cockpits";
+
+// The canonical demo estate (same id app/page.tsx redirects "/" to). Saving from
+// the playground commits the pasted program into this estate's graph in Aurora.
+const DEFAULT_ESTATE_ID = "546277ad-9ecb-4f96-aa29-b2b15c9ce9ad";
 
 const MODES: { id: AnalysisMode; label: string; blurb: string }[] = [
   { id: "explain", label: "Explain", blurb: "Purpose, complexity, rules" },
@@ -201,13 +206,16 @@ export function Playground() {
           )}
 
           {state.phase === "done" && (
-            <Result
-              mode={state.resultMode}
-              result={state.result}
-              triage={state.triage}
-              usage={state.usage}
-              liveText={state.liveText}
-            />
+            <>
+              <Result
+                mode={state.resultMode}
+                result={state.result}
+                triage={state.triage}
+                usage={state.usage}
+                liveText={state.liveText}
+              />
+              <SaveBar source={source} />
+            </>
           )}
         </section>
       </div>
@@ -311,3 +319,77 @@ function Result({
     </div>
   );
 }
+
+// ── Save to estate ──────────────────────────────────────────────────────
+// Commits the analyzed program into the persistent Aurora-backed estate graph,
+// then links to it. This is the bridge from the stateless playground to the
+// estate: paste → analyze → save → it joins the graph (cycles and all).
+function SaveBar({ source }: { source: string }) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<{ name: string; out: number; in: number } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await saveProgramToEstate(DEFAULT_ESTATE_ID, source);
+      if (!r.ok) setErr(r.error ?? "Save failed.");
+      else setDone({ name: r.programName ?? "program", out: r.edgesOut ?? 0, in: r.edgesIn ?? 0 });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Save failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (done) {
+    return (
+      <div style={SAVE_WRAP}>
+        <span style={{ color: "var(--ok, #34d399)", fontSize: 13 }}>
+          ✓ Saved {done.name} to the estate · {done.out} call{done.out === 1 ? "" : "s"} out, {done.in} in.
+        </span>
+        <a href={`/estate/${DEFAULT_ESTATE_ID}`} style={SAVE_LINK}>
+          Open estate graph →
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div style={SAVE_WRAP}>
+      <button type="button" onClick={save} disabled={busy} style={SAVE_BTN}>
+        {busy ? "Saving…" : "Save to estate →"}
+      </button>
+      <span style={{ color: "var(--text-faint, #64748b)", fontSize: 12 }}>
+        Persist this program to the Aurora-backed estate graph.
+      </span>
+      {err && <span style={{ color: "var(--crit, #f87171)", fontSize: 12 }}>{err}</span>}
+    </div>
+  );
+}
+
+const SAVE_WRAP: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  flexWrap: "wrap",
+  marginTop: 16,
+  paddingTop: 14,
+  borderTop: "1px solid var(--line, rgba(148,163,184,0.16))",
+};
+const SAVE_BTN: React.CSSProperties = {
+  padding: "9px 15px",
+  background: "var(--info, #7dd3fc)",
+  color: "#06121f",
+  border: "none",
+  borderRadius: 9,
+  cursor: "pointer",
+  font: "700 12.5px ui-monospace, monospace",
+};
+const SAVE_LINK: React.CSSProperties = {
+  color: "var(--info, #7dd3fc)",
+  fontSize: 13,
+  fontWeight: 600,
+  textDecoration: "none",
+};
