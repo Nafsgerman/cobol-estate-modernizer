@@ -54,7 +54,7 @@ export async function POST(
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1024,
       temperature: 0,
-      system: `You are an expert COBOL estate analyst. Answer based only on the provided estate data. Return ONLY a JSON object with: "answer" (string), "references" (array of {type, id, name}), "confidence" ("high"|"medium"|"low"). No markdown, no preamble.`,
+      system: `You are an expert COBOL estate analyst. Answer based only on the provided estate data. Return ONLY a JSON object with: "answer" (string), "references" (array of {type, id, name}), "confidence" ("high"|"medium"|"low"). No markdown fences, no preamble, raw JSON only.`,
       messages: [{
         role: "user",
         content: `Programs: ${JSON.stringify(progs)}\nCopybooks: ${JSON.stringify(books)}\nRules: ${JSON.stringify(rules)}\n\nQuestion: ${question}`,
@@ -64,7 +64,11 @@ export async function POST(
     const raw = response.content
       .filter((b) => b.type === "text")
       .map((b) => (b as { type: "text"; text: string }).text)
-      .join("");
+      .join("")
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
 
     let parsed: unknown;
     try {
