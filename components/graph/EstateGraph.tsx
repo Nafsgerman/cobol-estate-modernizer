@@ -25,6 +25,8 @@ import { AnalysisPanel } from "./AnalysisPanel";
 import { saveProgramToEstate } from "@/app/actions/estate-write";
 import type { ReactFlowGraph, RFNodeData } from "@/lib/graph/reactflow";
 import type { AnalysisMode } from "@/lib/ai/core";
+// add at top of EstateGraph.tsx imports
+import { EstateQueryPanel } from "./EstateQueryPanel";
 
 const nodeTypes: NodeTypes = { estateNode: EstateNode };
 
@@ -105,19 +107,15 @@ export function EstateGraph({ estateId }: { estateId: string }) {
     <div className="estate">
       <div className="estate__canvas">
         <div className="estate__hud">
-          <span>{graph?.stats.nodes ?? 0} nodes</span>
-          <span>{graph?.stats.edges ?? 0} edges</span>
-          {graph?.stats.cyclic && (
+          <span>{graph.stats.nodes} nodes</span>
+          <span>{graph.stats.edges} edges</span>
+          {graph.stats.cyclic && (
             <span className="estate__hud-cycle">cycle detected</span>
           )}
-          <button
-            type="button"
-            onClick={() => setAdding(true)}
-            style={ADD_BTN}
-            title="Paste a COBOL program to add it to this estate"
-          >
-            + Add program
-          </button>
+          <EstateQueryPanel
+            estateId={estateId}
+            onNodeFocus={(id) => setSelected(id)}
+          />
         </div>
 
         {isEmpty && (
