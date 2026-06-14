@@ -149,16 +149,21 @@ const RETRYABLE_CODES = new Set([
 ]);
 
 function isRetryable(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const code = (err as { code?: string }).code;
-  if (code && RETRYABLE_CODES.has(code)) return true;
-  const msg = (err as { message?: string }).message ?? "";
-  // Also unwrap pg's wrapped driver error (err.cause) seen in route logs.
-  const causeMsg =
-    (err as { cause?: { message?: string } }).cause?.message ?? "";
-  return RETRYABLE_MESSAGES.some(
-    (m) => msg.includes(m) || causeMsg.includes(m),
-  );
+  // Drizzle wraps pg errors as "Failed query: …" with the real connection
+  // failure one or two `.cause` levels down, so walk the entire chain instead
+  // of peeking a single level. Match on either a SQLSTATE/errno code or any of
+  // the known transient connection messages, at any depth.
+  let cur: unknown = err;
+  const seen = new Set<unknown>();
+  while (cur && typeof cur === "object" && !seen.has(cur)) {
+    seen.add(cur);
+    const code = (cur as { code?: string }).code;
+    if (code && RETRYABLE_CODES.has(code)) return true;
+    const msg = (cur as { message?: string }).message ?? "";
+    if (RETRYABLE_MESSAGES.some((m) => msg.includes(m))) return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -189,6 +194,18 @@ export async function withDbRetry<T>(
     }
   }
   throw lastErr;
+}
+
+/**
+ * Force a cold Aurora Serverless v2 instance to resume on a single connection
+ * *before* a burst of parallel queries hits the pool. Without this, the first
+ * graph load fires N concurrent chain queries that each try to establish a
+ * connection into a paused database at once; several lose the race to the
+ * connect timeout. One retried warm-up query resumes the instance, then the
+ * burst runs against a live pool. Cheap (`SELECT 1`) and idempotent.
+ */
+export async function warmDb(): Promise<void> {
+  await withDbRetry(() => pool.query("SELECT 1"));
 }
 
 /* ------------------------------------------------------------------ */

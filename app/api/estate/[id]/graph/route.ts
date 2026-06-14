@@ -4,7 +4,7 @@
 // from the recursive CTE, returns a dagre-laid-out React Flow payload.
 // =============================================================================
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db, warmDb } from "@/lib/db";
 import {
   loadEstateGraph,
   callChainDownstream,
@@ -22,6 +22,10 @@ export async function GET(
   const { id: estateId } = await params;
 
   try {
+    // Resume a cold Aurora instance on one connection before the parallel
+    // chain-query burst below, so concurrent connects don't race a paused DB.
+    await warmDb();
+
     const graph = await loadEstateGraph(db, estateId);
 
     // Cycle source of truth = the CTE. Run the cycle-flagged chain from each
