@@ -28,7 +28,7 @@ export async function POST(
 
   try {
     const progs = await db
-      .select({ id: program.id, name: program.programId, loc: program.lineCount })
+      .select({ id: program.id, name: program.programId })
       .from(program)
       .where(eq(program.estateId, estateId));
 
@@ -76,7 +76,7 @@ export async function POST(
 
     return NextResponse.json({ result: parsed, usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens } });
   } catch (err) {
-    const msg = err instanceof Error ? `${err.message} | ${err.stack?.split("\n")[1]}` : String(err);
+    const msg = err instanceof Error ? err.message : String(err);
     console.error(`[query] ${msg}`);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
