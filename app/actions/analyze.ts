@@ -174,7 +174,7 @@ async function run(
           error: err instanceof Error ? err.message : "unknown",
           finishedAt: new Date(),
         })
-        .where(eq(analysisRun.id, runId))
+        .where(eq(analysisRun.id, runId!))
         .catch(() => {});
     }
     stream.update({

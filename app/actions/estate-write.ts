@@ -76,7 +76,7 @@ export async function saveProgramToEstate(
         .from(program)
         .where(eq(program.estateId, estateId)),
     );
-    const byName = new Map(all.map((p) => [p.name.toUpperCase(), p.id]));
+    const byName = new Map<string, string>(all.map((row) => [row.name.toUpperCase(), row.id]));
 
     // Outbound: this program CALLs → existing programs.
     const outTargets = extractCallTargets(trimmed).filter(
@@ -89,7 +89,8 @@ export async function saveProgramToEstate(
       if (extractCallTargets(p.source).includes(name)) inboundIds.push(p.id);
     }
 
-    const edgeRows = [
+    type DepInsert = typeof dependency.$inferInsert;
+    const edgeRows: DepInsert[] = [
       ...outTargets.map((t) => ({
         estateId,
         sourceType: "program" as const,

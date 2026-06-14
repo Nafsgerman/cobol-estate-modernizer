@@ -183,7 +183,7 @@ function ExtractCockpit({ d }: { d: Obj }) {
         </Section>
       )}
 
-      {(depGroups.length > 0 || deps.verdict) && (
+      {(depGroups.length > 0 || Boolean(deps.verdict)) && (
         <Section title="Data dependencies">
           {depGroups.map(([label, items]) => (
             <DepRow key={label} label={label} items={items} />
@@ -262,7 +262,7 @@ function AssessCockpit({ d }: { d: Obj }) {
         </Section>
       )}
 
-      {(depGroups.length > 0 || deps.verdict) && (
+      {(depGroups.length > 0 || Boolean(deps.verdict)) && (
         <Section title="Dependencies">
           {depGroups.map(([label, items]) => (
             <DepRow key={label} label={label} items={items} />

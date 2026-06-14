@@ -96,9 +96,9 @@ export function EstateGraph({ estateId }: { estateId: string }) {
     <div className="estate">
       <div className="estate__canvas">
         <div className="estate__hud">
-          <span>{graph.stats.nodes} nodes</span>
-          <span>{graph.stats.edges} edges</span>
-          {graph.stats.cyclic && (
+          <span>{graph?.stats?.nodes ?? 0} nodes</span>
+          <span>{graph?.stats?.edges ?? 0} edges</span>
+          {Boolean(graph?.stats?.cyclic) && (
             <span className="estate__hud-cycle">cycle detected</span>
           )}
           <button

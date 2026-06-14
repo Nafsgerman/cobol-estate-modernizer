@@ -27,6 +27,8 @@ import { Pool, type PoolConfig } from "pg";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 
 import * as schema from "./schema";
+import { withDbRetry } from './retry';
+export { withDbRetry };
 import { sslConfig } from "./ssl"; // ⚠️ match this to your ssl.ts export (PEM string)
 
 /* ------------------------------------------------------------------ */
@@ -126,75 +128,6 @@ globalThis.__cobolEstatePool = pool;
 /* Retry wrapper — connection-class failures only                      */
 /* ------------------------------------------------------------------ */
 
-// Transient connection failures (stale pooled socket, cold-resume timeout).
-// SQL/logic errors (e.g. 42703 undefined_column) are NOT here — they must fail
-// fast, never retry.
-const RETRYABLE_MESSAGES = [
-  "Connection terminated unexpectedly",
-  "Connection terminated due to connection timeout",
-  "timeout exceeded when trying to connect",
-  "Client has encountered a connection error",
-  "server closed the connection unexpectedly",
-];
-const RETRYABLE_CODES = new Set([
-  "ECONNRESET",
-  "ETIMEDOUT",
-  "EPIPE",
-  "ECONNREFUSED",
-  "57P01", // admin_shutdown
-  "08000", // connection_exception
-  "08001", // sqlclient_unable_to_establish_sqlconnection
-  "08003", // connection_does_not_exist
-  "08006", // connection_failure
-]);
-
-function isRetryable(err: unknown): boolean {
-  // Drizzle wraps pg errors as "Failed query: …" with the real connection
-  // failure one or two `.cause` levels down, so walk the entire chain instead
-  // of peeking a single level. Match on either a SQLSTATE/errno code or any of
-  // the known transient connection messages, at any depth.
-  let cur: unknown = err;
-  const seen = new Set<unknown>();
-  while (cur && typeof cur === "object" && !seen.has(cur)) {
-    seen.add(cur);
-    const code = (cur as { code?: string }).code;
-    if (code && RETRYABLE_CODES.has(code)) return true;
-    const msg = (cur as { message?: string }).message ?? "";
-    if (RETRYABLE_MESSAGES.some((m) => msg.includes(m))) return true;
-    cur = (cur as { cause?: unknown }).cause;
-  }
-  return false;
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Run a DB operation with a small number of retries on connection-class errors.
- * The first failed attempt evicts the dead client from the pool, so the next
- * attempt acquires (or establishes) a fresh connection. Backoff also gives a
- * cold Aurora instance a moment to finish resuming.
- */
-export async function withDbRetry<T>(
-  fn: () => Promise<T>,
-  attempts = 3,
-): Promise<T> {
-  const backoff = [200, 600]; // ms before retries 2 and 3
-  let lastErr: unknown;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      if (i === attempts - 1 || !isRetryable(err)) throw err;
-      console.warn(
-        `[db] retryable error (attempt ${i + 1}/${attempts}), retrying:`,
-        (err as { message?: string }).message,
-      );
-      await sleep(backoff[i] ?? 600);
-    }
-  }
-  throw lastErr;
-}
 
 /**
  * Force a cold Aurora Serverless v2 instance to resume on a single connection

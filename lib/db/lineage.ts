@@ -10,7 +10,7 @@
 // =============================================================================
 import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { withDbRetry } from './index';
+import { withDbRetry } from './retry';
 
 export interface CallChainRow {
   program_id: string;
@@ -67,7 +67,7 @@ export async function callChainDownstream(
     ORDER BY depth, program_name;
   `),
   );
-  return res.rows as CallChainRow[];
+  return res.rows as unknown as CallChainRow[];
 }
 
 // ---------- force-graph loader (nodes + edges for one estate) ---------------
@@ -90,8 +90,8 @@ export async function loadEstateGraph(db: NodePgDatabase<any>, estateId: string)
   `),
   );
   return {
-    nodes: nodes.rows as GraphNode[],
-    edges: edges.rows as GraphEdge[],
+    nodes: nodes.rows as unknown as GraphNode[],
+    edges: edges.rows as unknown as GraphEdge[],
   };
 }
 

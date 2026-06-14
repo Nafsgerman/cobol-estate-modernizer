@@ -21,7 +21,7 @@ beforeAll(async () => {
   // A -> B -> C, and a mutually recursive pair X <-> Y reachable from A.
   // A also calls X, so traversal from A must enter and survive the X<->Y cycle.
   const defs = ['A', 'B', 'C', 'X', 'Y'].map((n) => ({ estateId, programId: n }));
-  const rows = await h.db.insert(program).values(defs).returning();
+  const rows = (await h.db.insert(program).values(defs).returning()) as unknown as Array<{ id: string; programId: string }>;
   for (const r of rows) P[r.programId] = r.id;
 
   const call = (s: string, t: string) => ({

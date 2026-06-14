@@ -4,7 +4,7 @@
 // =============================================================================
 import {
   pgTable, pgEnum, uuid, text, integer, smallint, boolean, numeric,
-  jsonb, timestamp, primaryKey, unique, index, check, foreignKey,
+  jsonb, timestamp, primaryKey, unique, index, check,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
@@ -38,12 +38,11 @@ export const program = pgTable('program', {
   source:       text('source'),
   metadata:     jsonb('metadata').notNull().default({}),
   // self-referential-ish FK to analysis_run; typed loosely to dodge cycle, see relations
-  lastRunId:    uuid('last_run_id'),
+  lastRunId:    uuid('last_run_id').references((): AnyPgColumn => analysisRun.id, { onDelete: 'set null' }),
   createdAt:    timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ([
   unique('program_estate_program_id').on(t.estateId, t.programId),
   index('idx_program_estate').on(t.estateId),
-  foreignKey({ columns: [t.lastRunId], foreignColumns: [analysisRun.id], name: 'program_last_run_fk' }).onDelete('set null'),
 ]));
 
 // ---------- copybook --------------------------------------------------------
