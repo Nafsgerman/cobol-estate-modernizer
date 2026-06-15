@@ -4,20 +4,16 @@ __v0_devtools.tsx
 __v0_jsx-dev-runtime.ts
 .snowflake/
 .v0-trash/
-.vercel/
 
-# Environment variables
-.env*.local
+# Environment variables (never commit; keep only .env.example)
+.env
+.env.*
+!.env.example
 
 # Common ignores
 node_modules
 .next/
 .DS_Store
 .vercel
+.vercel/
 certs/*.pem
-.env
-.env
-.env.local
-.env.vercel
-.env.*.local
-*.pem
