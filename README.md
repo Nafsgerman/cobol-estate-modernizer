@@ -53,6 +53,9 @@ Non-obvious choices are recorded as ADRs in [`docs/adr/`](docs/adr):
 - [0004](docs/adr/0004-pg16-portability.md) — PG16 portability (Aurora primary; one-line swap to Databricks Lakebase)
 - [0005](docs/adr/0005-recursive-cte-cycle-guard.md) — cycle-safe recursive traversal, proven by test
 
+A reviewer-facing walkthrough of how each claim is backed by code lives in
+[`docs/TECHNICAL_PROOF.md`](docs/TECHNICAL_PROOF.md).
+
 ## Data model
 `estate` → `program` / `copybook` / `analysis_run` / `ticket`; `data_element`
 (self-referential hierarchy); `business_rule` (traced back to the run that
@@ -61,32 +64,40 @@ produced it); `dependency` (the typed-edge graph). Full DDL in
 [`lib/db/schema.ts`](lib/db/schema.ts).
 
 ## Local development
+
+The app authenticates to Aurora with **RDS IAM tokens minted from Vercel OIDC** —
+there is no `DATABASE_URL` and no stored password. The Aurora cluster is
+provisioned inside **Vercel's AWS account**, so you cannot `psql` to it directly
+from a laptop. Day-to-day development therefore runs against a local Postgres for
+the data layer (tests, below) and against **Vercel preview deploys** for the live
+app, where OIDC supplies credentials automatically.
+
 ```bash
 pnpm install
 
-# 1. Provision Aurora PostgreSQL Serverless v2 (PG16), then:
-cp .env.example .env.local        # fill in DATABASE_URL + ANTHROPIC_API_KEY
+# 1. Anthropic SDK key for the analysis calls
+cp .env.example .env.local        # set ANTHROPIC_API_KEY
 
-# 2. TLS: fetch the AWS RDS CA bundle (verified, not disabled)
-curl -o certs/rds-global-bundle.pem \
-  https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
-
-# 3. Apply schema (source of truth incl. partial index + deferred FK)
-psql "$DATABASE_URL" -f lib/db/schema.sql
-
-# 4. Seed a demo estate
-pnpm tsx scripts/seed.ts
-
-# 5. Run
+# 2. Run the app
 pnpm dev
 ```
+
+Connection config is read from `PGHOST`, `PGUSER`, `PGDATABASE` (default
+`postgres`), `PGPORT` (default `5432`), `AWS_REGION`, and `AWS_ROLE_ARN` — set in
+the Vercel project, not committed. On Vercel these are paired with OIDC; locally,
+`lib/db/index.ts` falls back to the AWS default provider chain (SSO / profile /
+env), which only resolves if your credentials can reach the cluster's account.
+TLS is verified against the system trust store (`rejectUnauthorized: true`); no CA
+bundle file is required for the Vercel-provisioned endpoint.
 
 ## Tests
 ```bash
 pnpm test     # spins a real Postgres 16 (testcontainers), applies schema.sql,
               # proves the recursive call-chain terminates on cyclic input
 ```
-Requires Docker.
+Requires Docker. This is the real local loop for the data layer — it exercises the
+recursive CTE, enums, and partial indexes against production DDL, with no
+dependency on the remote Aurora cluster.
 
 ## Stack
 Next.js (App Router) · v0 · Vercel · Amazon Aurora PostgreSQL Serverless v2 ·
