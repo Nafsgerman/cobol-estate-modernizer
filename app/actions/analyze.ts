@@ -161,6 +161,9 @@ async function run(
     if (mode === "extract") {
       await persistExtract(estateId, programId, runId as string, result);
     }
+    if (mode === "explain") {
+      await persistExplain(estateId, programId, runId as string, result);
+    }
 
     stream.update({ type: "done", mode, runId, result, usage });
     stream.done();
@@ -262,6 +265,59 @@ async function persistExtract(
         effort: jt.story_points != null ? `${jt.story_points} pts` : null,
       });
     }
+  }
+}
+
+/** Map explain-mode business_rules[] into business_rule rows (no tickets). */
+async function persistExplain(
+  estateId: string,
+  programId: string,
+  runId: string,
+  result: unknown,
+): Promise<void> {
+  if (!result || typeof result !== "object") return;
+  const rules = (
+    (result as Record<string, unknown>).details as Record<string, unknown>
+  )?.business_rules;
+  if (!Array.isArray(rules)) return;
+
+  for (const r of rules as Record<string, unknown>[]) {
+    const cat = (RULE_CATS.has(String(r.category)) ? r.category : "other") as RuleCat;
+    await db.insert(businessRule).values({
+      estateId,
+      programId,
+      runId,
+      statement: String(r.statement ?? "Untitled rule"),
+      category: cat,
+      location: r.location ? String(r.location) : null,
+      metadata: { id: r.id },
+    });
+  }
+}
+
+async function persistExplain(
+  estateId: string,
+  programId: string,
+  runId: string,
+  result: unknown,
+): Promise<void> {
+  if (!result || typeof result !== "object") return;
+  const rules = (
+    (result as Record<string, unknown>).details as Record<string, unknown>
+  )?.business_rules;
+  if (!Array.isArray(rules)) return;
+
+  for (const r of rules as Record<string, unknown>[]) {
+    const cat = (RULE_CATS.has(String(r.category)) ? r.category : "other") as RuleCat;
+    await db.insert(businessRule).values({
+      estateId,
+      programId,
+      runId,
+      statement: String(r.statement ?? "Untitled rule"),
+      category: cat,
+      location: r.location ? String(r.location) : null,
+      metadata: { id: r.id },
+    });
   }
 }
 

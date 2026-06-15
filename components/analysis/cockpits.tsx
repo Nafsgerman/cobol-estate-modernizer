@@ -784,10 +784,17 @@ const ID_BADGE: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 const LOCATION: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-  fontSize: 12,
-  color: "rgba(226,232,240,0.5)",
+  fontSize: 11,
+  color: "rgba(125,211,252,0.8)",
   marginTop: 6,
+  padding: "2px 7px",
+  borderRadius: 5,
+  border: "1px solid rgba(125,211,252,0.22)",
+  background: "rgba(125,211,252,0.06)",
+  alignSelf: "flex-start",
 };
 const MITIGATION: React.CSSProperties = { fontSize: 13, lineHeight: 1.55, marginTop: 8, color: "rgba(226,232,240,0.82)" };
 const MIT_LABEL: React.CSSProperties = {
