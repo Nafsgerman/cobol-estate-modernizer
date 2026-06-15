@@ -21,7 +21,10 @@ function EstateNodeBase({ data, selected }: NodeProps & { data: RFNodeData }) {
       <div className="estate-node__head">
         <span className="estate-node__tag">{isProgram ? "PROG" : "COPY"}</span>
         <span className="estate-node__name">{data.label}</span>
-        {data.inCycle && <span className="estate-node__cycle">CYCLE</span>}
+          {data.inCycle && <span className="estate-node__cycle">CYCLE</span>}
+          {!data.inCycle && data.inDegree === 0 && isProgram && (
+            <span className="estate-node__entry">ENTRY</span>
+        )}
       </div>
       <div className="estate-node__meta">
         <span className="estate-node__deg" title="callers in / callees out">
