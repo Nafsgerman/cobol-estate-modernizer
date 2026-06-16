@@ -1,0 +1,97 @@
+```mermaid
+flowchart TD
+    subgraph CLIENT["Browser (React 19)"]
+        PG["Playground\n(stateless)"]
+        EG["Estate Graph\nReact Flow + dagre layout"]
+        AP["AnalysisPanel\n(streaming cockpit)"]
+    end
+
+    subgraph VERCEL["Vercel (Edge + Node runtime)"]
+        direction TB
+        SA_PG["Server Action\napp/actions/playground.ts"]
+        SA_AN["Server Action\napp/actions/analyze.ts"]
+        SA_ES["Server Action\napp/actions/estate.ts"]
+
+        subgraph AILIB["lib/ai/"]
+            TR["triage.ts\nHaiku — language detect\n+ syntax gate\n(temp: 0)"]
+            PR["prompts.ts\nsystemPrompt / userMessage\nper mode"]
+            SU["summarize.ts\nDerives summary from\ndetails — never trusts model"]
+            CO["core.ts\nMODEL constants\ncost calculator\nextractJson"]
+        end
+
+        subgraph DBLIB["lib/db/"]
+            DI["index.ts\nDrizzle singleton\nIAM token cached 10 min"]
+            LI["lineage.ts\nrecursive CTE traversal\ncycle guard"]
+            SS["ssl.ts\nrejectUnauthorized: true\nsystem trust store"]
+        end
+    end
+
+    subgraph ANTHROPIC["Anthropic API"]
+        HK["claude-haiku-4-5\nTriage only\n~1 s · ~$0.002"]
+        SN["claude-sonnet-4-6\nExplain / Modernize\nAssess / Extract / Deps\n8192 tokens · temp 0"]
+    end
+
+    subgraph AURORA["Amazon Aurora PostgreSQL Serverless v2"]
+        direction TB
+        subgraph SCHEMA["Schema (8 entities)"]
+            E["estate"]
+            P["program"]
+            CB["copybook"]
+            DE["data_element"]
+            AR["analysis_run\n(lineage anchor)"]
+            BR["business_rule"]
+            TK["ticket"]
+            DP["dependency\n(polymorphic typed edges)"]
+        end
+        CTE["Recursive CTE\nCycle-safe call-chain traversal\nPG 16 WITH RECURSIVE"]
+    end
+
+    subgraph OIDC["IAM / OIDC (Vercel ↔ AWS)"]
+        OT["OIDC federated token\n@vercel/functions/oidc"]
+        RS["RDS Signer\n@aws-sdk/rds-signer\nmints 15-min auth token"]
+    end
+
+    PG -->|"paste + mode"| SA_PG
+    EG -->|"click node"| AP
+    AP -->|"estateId + programId + mode"| SA_AN
+    EG -->|"load estate"| SA_ES
+
+    SA_PG --> TR
+    TR -->|"verdict: blocking → stop"| SA_PG
+    TR -->|"verdict: clean/cosmetic"| SN
+    SA_PG --> PR
+    SA_PG --> SU
+    SA_PG --> CO
+
+    SA_AN --> TR
+    SA_AN --> PR
+    SA_AN --> SU
+    SA_AN --> CO
+    SA_AN -->|"dependencies mode"| LI
+    SA_AN -->|"persist run / extract"| DI
+
+    TR --> HK
+    PR --> SN
+    SN -->|"stream deltas"| SA_AN
+    SN -->|"stream deltas"| SA_PG
+
+    DI --> SS
+    DI -->|"pg connection"| AURORA
+    LI -->|"WITH RECURSIVE"| CTE
+    CTE --> SCHEMA
+
+    SA_ES --> DI
+
+    VERCEL -->|"OIDC token request"| OT
+    OT --> RS
+    RS -->|"IAM auth token → pg password"| DI
+
+    style CLIENT fill:#0f172a,color:#e2e8f0,stroke:#334155
+    style VERCEL fill:#0a0a0a,color:#e2e8f0,stroke:#262626
+    style ANTHROPIC fill:#1a1a2e,color:#e2e8f0,stroke:#16213e
+    style AURORA fill:#0d1117,color:#e2e8f0,stroke:#161b22
+    style OIDC fill:#1a0a00,color:#e2e8f0,stroke:#3d1a00
+    style AILIB fill:#111827,color:#d1d5db,stroke:#374151
+    style DBLIB fill:#111827,color:#d1d5db,stroke:#374151
+    style SCHEMA fill:#0a1628,color:#93c5fd,stroke:#1e3a5f
+```
