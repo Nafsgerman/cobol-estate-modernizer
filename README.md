@@ -1,14 +1,12 @@
-# COBOL Estate Advisor
+# COBOL Estate Modernizer
 
 > A legacy-modernization knowledge base for enterprise COBOL estates. Analyzes
 > mainframe programs with Claude to extract business rules and data lineage, then
 > stores them as a queryable estate graph on Amazon Aurora PostgreSQL — so teams
 > can *see* how programs, copybooks, and rules connect before they re-platform.
 
-**H0 Hackathon — Track 2 (Monetizable B2B).** Built on the v0/Vercel + AWS
+**H0 Hackathon — Track 2 (Monetizable B2B).** Built on the v0 / Vercel + AWS
 Databases stack.
-
-<!-- TODO: hero GIF of the force-graph -> click node -> rules drill-down -->
 
 ---
 
@@ -20,27 +18,66 @@ single-file analysis into an estate-wide, queryable graph that answers those
 questions.
 
 ## What it does
-- **Four analysis modes** (ported from the original [cobol-ai-advisor](https://github.com/Nafsgerman/cobol-ai-advisor)):
-  Explain, Modernize, Assess, Extract — each a Claude call.
+- **Five analysis modes** — Explain, Modernize, Assess, Extract (ported from the
+  original [cobol-ai-advisor](https://github.com/Nafsgerman/cobol-ai-advisor)),
+  plus a graph-aware **Dependencies** mode. Each is a Claude call.
 - **Estate graph** — programs, copybooks, data elements, and typed dependency
-  edges, stored in Aurora PostgreSQL.
+  edges, persisted in Aurora PostgreSQL.
 - **Recursive call-chain traversal** — one SQL query walks the full call graph
   with cycle protection; mutually-recursive COBOL CALLs are detected and surfaced
   as re-platforming risks, not silently looped.
-- **Interactive lineage** — D3 force-graph; click a node to see the business
-  rules extracted from it.
+- **Interactive lineage** — a React Flow dependency graph; click a node to see
+  the business rules extracted from it.
+
+## How analysis stays trustworthy
+This is not "ask the model and print the answer."
+- Every analytical call runs at **`temperature: 0`** for determinism.
+- In JSON modes the model returns only `details`; the `summary` is **derived in
+  code** (`lib/ai/summarize.ts`) and rollups are reconciled back into `details`.
+  The model's own summary is never trusted.
+- **Estate** (DB-backed, persisted) and **playground** (stateless) are separate
+  code paths, so the queryable graph is never polluted by throwaway runs.
 
 ## Architecture
-<!-- TODO: architecture diagram (also required for the H0 submission) -->
+Front-end on Vercel, two server-side analysis paths, Claude for reasoning, and
+Aurora PostgreSQL as the system of record — reached over an IAM-signed
+connection (no static DB password). Full diagram in
+[`docs/architecture.mermaid`](docs/architecture.mermaid).
 
-```
-v0 / Next.js (Vercel)  ──►  Route Handlers + Server Actions
-                               │            │
-                               │            └─►  Anthropic TS SDK  ──►  Claude
-                               ▼
-                          Drizzle ORM
-                               ▼
-                 Amazon Aurora PostgreSQL Serverless v2 (PG16)
+```mermaid
+flowchart TB
+    subgraph client["Browser"]
+        ui["Next.js 16 · React 19 UI<br/>shadcn/ui · React Flow + dagre graph"]
+    end
+
+    subgraph vercel["Vercel — nafees-deploy"]
+        rh["Route Handlers"]
+        sa["Server Actions · streamed"]
+        estate["Estate path<br/>app/actions/analyze.ts<br/>(persisted)"]
+        play["Playground path<br/>app/actions/playground.ts<br/>(stateless)"]
+        oidc["Vercel OIDC token"]
+    end
+
+    subgraph anthropic["Anthropic API · temperature 0"]
+        sonnet["Claude Sonnet 4.6<br/>5 analysis modes"]
+        haiku["Claude Haiku 4.5<br/>source triage"]
+    end
+
+    subgraph aws["AWS"]
+        signer["@aws-sdk/rds-signer<br/>IAM auth token"]
+        aurora[("Amazon Aurora PostgreSQL<br/>Serverless v2 · PG16")]
+    end
+
+    ui --> rh
+    ui --> sa
+    sa --> estate
+    sa --> play
+    estate --> haiku
+    estate --> sonnet
+    play --> sonnet
+    estate -->|"Drizzle ORM · recursive CTE, cycle-guarded"| aurora
+    oidc --> signer
+    signer -->|"15-min IAM token"| aurora
 ```
 
 The engine is full Next.js — no separate Python service. Long analysis calls are
@@ -53,9 +90,6 @@ Non-obvious choices are recorded as ADRs in [`docs/adr/`](docs/adr):
 - [0004](docs/adr/0004-pg16-portability.md) — PG16 portability (Aurora primary; one-line swap to Databricks Lakebase)
 - [0005](docs/adr/0005-recursive-cte-cycle-guard.md) — cycle-safe recursive traversal, proven by test
 
-A reviewer-facing walkthrough of how each claim is backed by code lives in
-[`docs/TECHNICAL_PROOF.md`](docs/TECHNICAL_PROOF.md).
-
 ## Data model
 `estate` → `program` / `copybook` / `analysis_run` / `ticket`; `data_element`
 (self-referential hierarchy); `business_rule` (traced back to the run that
@@ -64,44 +98,41 @@ produced it); `dependency` (the typed-edge graph). Full DDL in
 [`lib/db/schema.ts`](lib/db/schema.ts).
 
 ## Local development
-
-The app authenticates to Aurora with **RDS IAM tokens minted from Vercel OIDC** —
-there is no `DATABASE_URL` and no stored password. The Aurora cluster is
-provisioned inside **Vercel's AWS account**, so you cannot `psql` to it directly
-from a laptop. Day-to-day development therefore runs against a local Postgres for
-the data layer (tests, below) and against **Vercel preview deploys** for the live
-app, where OIDC supplies credentials automatically.
-
 ```bash
 pnpm install
 
-# 1. Anthropic SDK key for the analysis calls
-cp .env.example .env.local        # set ANTHROPIC_API_KEY
+# 1. Provision Aurora PostgreSQL Serverless v2 (PG16), then:
+cp .env.example .env.local        # fill in DATABASE_URL + ANTHROPIC_API_KEY
 
-# 2. Run the app
+# 2. TLS: fetch the AWS RDS CA bundle (verified, not disabled)
+curl -o certs/rds-global-bundle.pem \
+  https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+
+# 3. Apply schema (source of truth incl. partial index + deferred FK)
+psql "$DATABASE_URL" -f lib/db/schema.sql
+
+# 4. Seed a demo estate
+pnpm tsx scripts/seed.ts
+
+# 5. Run
 pnpm dev
 ```
-
-Connection config is read from `PGHOST`, `PGUSER`, `PGDATABASE` (default
-`postgres`), `PGPORT` (default `5432`), `AWS_REGION`, and `AWS_ROLE_ARN` — set in
-the Vercel project, not committed. On Vercel these are paired with OIDC; locally,
-`lib/db/index.ts` falls back to the AWS default provider chain (SSO / profile /
-env), which only resolves if your credentials can reach the cluster's account.
-TLS is verified against the system trust store (`rejectUnauthorized: true`); no CA
-bundle file is required for the Vercel-provisioned endpoint.
+In production on Vercel, the DB connection is authenticated with a short-lived
+IAM token (`@aws-sdk/rds-signer` + Vercel OIDC) — there is no static database
+password in any environment variable.
 
 ## Tests
 ```bash
 pnpm test     # spins a real Postgres 16 (testcontainers), applies schema.sql,
               # proves the recursive call-chain terminates on cyclic input
 ```
-Requires Docker. This is the real local loop for the data layer — it exercises the
-recursive CTE, enums, and partial indexes against production DDL, with no
-dependency on the remote Aurora cluster.
+Requires Docker.
 
 ## Stack
-Next.js (App Router) · v0 · Vercel · Amazon Aurora PostgreSQL Serverless v2 ·
-Drizzle ORM · Anthropic TS SDK · D3 · Vitest + Testcontainers
+Next.js 16 (App Router, Turbopack) · React 19 · v0 · Vercel · Amazon Aurora
+PostgreSQL Serverless v2 (PG16, IAM auth) · Drizzle ORM · Anthropic TS SDK
+(Claude Sonnet 4.6 analysis + Claude Haiku 4.5 triage) · React Flow + dagre ·
+Vitest + Testcontainers
 
 ## Credits
 Builds on [cobol-ai-advisor](https://github.com/Nafsgerman/cobol-ai-advisor)

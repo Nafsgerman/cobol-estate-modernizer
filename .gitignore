@@ -16,4 +16,4 @@ node_modules
 .DS_Store
 .vercel
 .vercel/
-certs/*.pem
+certs/*.pemtsconfig.tsbuildinfo
