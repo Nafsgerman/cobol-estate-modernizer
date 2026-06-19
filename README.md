@@ -1,103 +1,120 @@
 # COBOL Estate Modernizer
 
-> A legacy-modernization knowledge base for enterprise COBOL estates. Analyzes
-> mainframe programs with Claude to extract business rules and data lineage, then
-> stores them as a queryable estate graph on Amazon Aurora PostgreSQL — so teams
-> can *see* how programs, copybooks, and rules connect before they re-platform.
+> Point it at a pile of legacy mainframe code and it hands you back a map:
+> which programs call which, where the business rules are buried, and which call
+> chains quietly loop back on themselves. The kind of thing a modernization team
+> normally spends months reconstructing by hand — before they dare touch a line.
 
-**H0 Hackathon — Track 2 (Monetizable B2B).** Built on the v0 / Vercel + AWS
+Built for the **H0 Hackathon — Track 2 (Monetizable B2B)**, on the Vercel + AWS
 Databases stack.
+
+<!-- TODO: hero GIF — estate graph → click a node → business rules drill-down -->
 
 ---
 
-## Why this exists
-Enterprises run billions of lines of COBOL no one fully understands anymore.
-Before any modernization, someone has to answer: *what does this program do, what
-calls it, and what business rules are buried inside it?* This tool turns
-single-file analysis into an estate-wide, queryable graph that answers those
-questions.
+## The problem
 
-## What it does
-- **Five analysis modes** — Explain, Modernize, Assess, Extract (ported from the
-  original [cobol-ai-advisor](https://github.com/Nafsgerman/cobol-ai-advisor)),
-  plus a graph-aware **Dependencies** mode. Each is a Claude call.
-- **Estate graph** — programs, copybooks, data elements, and typed dependency
-  edges, persisted in Aurora PostgreSQL.
-- **Recursive call-chain traversal** — one SQL query walks the full call graph
-  with cycle protection; mutually-recursive COBOL CALLs are detected and surfaced
-  as re-platforming risks, not silently looped.
-- **Interactive lineage** — a React Flow dependency graph; click a node to see
-  the business rules extracted from it.
+Banks, insurers, and governments run on billions of lines of COBOL that almost
+nobody on staff fully understands anymore. The danger was never a single
+program — it's the *graph*. What calls this thing? What does it call? And if I
+rewrite it, what silently breaks three hops away?
 
-## How analysis stays trustworthy
-This is not "ask the model and print the answer."
-- Every analytical call runs at **`temperature: 0`** for determinism.
-- In JSON modes the model returns only `details`; the `summary` is **derived in
-  code** (`lib/ai/summarize.ts`) and rollups are reconciled back into `details`.
-  The model's own summary is never trusted.
-- **Estate** (DB-backed, persisted) and **playground** (stateless) are separate
-  code paths, so the queryable graph is never polluted by throwaway runs.
+Teams answer those questions manually, program by program, for months, before
+any modernization can safely begin. This tool collapses that discovery phase
+into something you can click through in an afternoon.
 
-## Architecture
-Front-end on Vercel, two server-side analysis paths, Claude for reasoning, and
-Aurora PostgreSQL as the system of record — reached over an IAM-signed
-connection (no static DB password). Full diagram in
-[`docs/architecture.mermaid`](docs/architecture.mermaid).
+## What it actually does
+
+You give it an estate. It gives you:
+
+- **A live dependency graph** — programs and copybooks as nodes, typed CALL and
+  COPY edges between them. Nodes scale with coupling, so the load-bearing
+  programs jump out immediately.
+- **Cycle-safe call-chain traversal** — the part worth reading the code for.
+  COBOL call graphs can be mutually recursive (A calls B, B calls A). A naive
+  walk never terminates. This one walks the *entire* downstream chain in a
+  single database round-trip and turns any cycle it finds into a flagged
+  re-platforming risk instead of an infinite loop.
+- **AI analysis per program** — Explain, Modernize, Assess, and Extract modes,
+  streamed live, with every run recorded back to the database as lineage you can
+  trace later.
+
+## How it's wired
 
 ```mermaid
 flowchart TB
     subgraph client["Browser"]
-        ui["Next.js 16 · React 19 UI<br/>shadcn/ui · React Flow + dagre graph"]
+        UI["Next.js 16 · React 19<br/>React Flow + dagre estate graph"]
     end
 
-    subgraph vercel["Vercel — nafees-deploy"]
-        rh["Route Handlers"]
-        sa["Server Actions · streamed"]
-        estate["Estate path<br/>app/actions/analyze.ts<br/>(persisted)"]
-        play["Playground path<br/>app/actions/playground.ts<br/>(stateless)"]
-        oidc["Vercel OIDC token"]
+    subgraph vercel["Vercel"]
+        SA["Server Actions<br/>analyze · playground"]
+        RH["Route Handler<br/>/api/estate/[id]/graph"]
     end
 
-    subgraph anthropic["Anthropic API · temperature 0"]
-        sonnet["Claude Sonnet 4.6<br/>5 analysis modes"]
-        haiku["Claude Haiku 4.5<br/>source triage"]
+    subgraph anthropic["Anthropic"]
+        CL["Claude Sonnet 4.6 — analysis<br/>Claude Haiku 4.5 — triage gate"]
     end
 
     subgraph aws["AWS"]
-        signer["@aws-sdk/rds-signer<br/>IAM auth token"]
-        aurora[("Amazon Aurora PostgreSQL<br/>Serverless v2 · PG16")]
+        DB[("Amazon Aurora PostgreSQL<br/>Serverless v2 · PG16")]
     end
 
-    ui --> rh
-    ui --> sa
-    sa --> estate
-    sa --> play
-    estate --> haiku
-    estate --> sonnet
-    play --> sonnet
-    estate -->|"Drizzle ORM · recursive CTE, cycle-guarded"| aurora
-    oidc --> signer
-    signer -->|"15-min IAM token"| aurora
+    UI -->|server action| SA
+    UI -->|fetch graph| RH
+    SA -->|Anthropic SDK · temperature 0| CL
+    SA -->|Drizzle ORM| DB
+    RH -->|recursive CTE · cycle-guarded| DB
+    SA -.->|Vercel OIDC → AWS IAM<br/>short-lived token · no password| DB
+
+    classDef store fill:#16233f,stroke:#3b5b8c,color:#ffffff
+    class DB store
 ```
 
-The engine is full Next.js — no separate Python service. Long analysis calls are
-streamed to stay within serverless timeouts.
+It's one Next.js app — no separate Python service. Long analysis calls stream so
+they stay inside serverless timeouts. The database hop authenticates through
+Vercel's OIDC federation into an AWS IAM role: no password is stored anywhere, no
+`DATABASE_URL` lives in the repo, and a short-lived token is minted per
+connection at runtime.
 
-## Engineering decisions
-Non-obvious choices are recorded as ADRs in [`docs/adr/`](docs/adr):
-- [0002](docs/adr/0002-aurora-postgres-as-primary-datastore.md) — why Aurora PostgreSQL over DynamoDB / Aurora DSQL
-- [0003](docs/adr/0003-polymorphic-typed-edges.md) — polymorphic typed edges, and the integrity tradeoff
-- [0004](docs/adr/0004-pg16-portability.md) — PG16 portability (Aurora primary; one-line swap to Databricks Lakebase)
-- [0005](docs/adr/0005-recursive-cte-cycle-guard.md) — cycle-safe recursive traversal, proven by test
+## The one query worth reading
+
+The headline feature is a single recursive CTE that carries an explicit
+`path uuid[]` accumulator and an `is_cycle` flag. The moment a node reappears in
+its own path it's flagged, the recursive arm stops expanding that branch
+(`WHERE NOT c.is_cycle`), and a `maxDepth` bound backs it up. So a mutually
+recursive COBOL call chain becomes a *visible product feature* — a risk ticket —
+rather than a hang. There's an automated test that seeds an A↔B cycle and asserts
+a finite, cycle-flagged result; if the guard ever regresses, the test hangs until
+timeout, which is exactly the loud failure you want.
+
+See [`lib/db/lineage.ts`](lib/db/lineage.ts) and
+[ADR 0005](docs/adr/0005-recursive-cte-cycle-guard.md).
+
+## Why these choices
+
+The non-obvious decisions are written down as ADRs in [`docs/adr/`](docs/adr):
+
+- [0002](docs/adr/0002-aurora-postgres-as-primary-datastore.md) — why Aurora PostgreSQL over DynamoDB and Aurora DSQL
+- [0003](docs/adr/0003-polymorphic-typed-edges.md) — polymorphic typed edges, and the integrity tradeoff that comes with them
+- [0004](docs/adr/0004-pg16-portability.md) — keeping the schema to core PG16 so persistence stays a swappable concern
+- [0005](docs/adr/0005-recursive-cte-cycle-guard.md) — the cycle-safe traversal, proven by test
+
+One design rule runs through all of it: **the model is never the source of
+truth.** Claude returns structured `details`; the human-readable summary is
+*derived in code* and reconciled back into those details. The LLM generates, the
+application stays authoritative.
 
 ## Data model
+
 `estate` → `program` / `copybook` / `analysis_run` / `ticket`; `data_element`
-(self-referential hierarchy); `business_rule` (traced back to the run that
-produced it); `dependency` (the typed-edge graph). Full DDL in
-[`lib/db/schema.sql`](lib/db/schema.sql), Drizzle schema in
+(a self-referential hierarchy); `business_rule` (traced back to the run that
+produced it); `dependency` (the typed-edge graph itself). Full DDL lives in
+[`lib/db/schema.sql`](lib/db/schema.sql), the Drizzle schema in
 [`lib/db/schema.ts`](lib/db/schema.ts).
 
-## Local development
+## Running it locally
+
 ```bash
 pnpm install
 
@@ -108,7 +125,7 @@ cp .env.example .env.local        # fill in DATABASE_URL + ANTHROPIC_API_KEY
 curl -o certs/rds-global-bundle.pem \
   https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
 
-# 3. Apply schema (source of truth incl. partial index + deferred FK)
+# 3. Apply the schema (source of truth, incl. partial index + deferred FK)
 psql "$DATABASE_URL" -f lib/db/schema.sql
 
 # 4. Seed a demo estate
@@ -117,24 +134,24 @@ pnpm tsx scripts/seed.ts
 # 5. Run
 pnpm dev
 ```
-In production on Vercel, the DB connection is authenticated with a short-lived
-IAM token (`@aws-sdk/rds-signer` + Vercel OIDC) — there is no static database
-password in any environment variable.
 
 ## Tests
+
 ```bash
-pnpm test     # spins a real Postgres 16 (testcontainers), applies schema.sql,
-              # proves the recursive call-chain terminates on cyclic input
+pnpm test     # spins up a real Postgres 16 (testcontainers), applies schema.sql,
+              # and proves the recursive call-chain terminates on cyclic input
 ```
+
 Requires Docker.
 
 ## Stack
-Next.js 16 (App Router, Turbopack) · React 19 · v0 · Vercel · Amazon Aurora
-PostgreSQL Serverless v2 (PG16, IAM auth) · Drizzle ORM · Anthropic TS SDK
-(Claude Sonnet 4.6 analysis + Claude Haiku 4.5 triage) · React Flow + dagre ·
-Vitest + Testcontainers
+
+Next.js 16 (App Router, Turbopack) · React 19 · Vercel · Amazon Aurora
+PostgreSQL Serverless v2 · Drizzle ORM · Anthropic TypeScript SDK · React Flow
+(`@xyflow/react` + `@dagrejs/dagre`) · Vitest + Testcontainers
 
 ## Credits
-Builds on [cobol-ai-advisor](https://github.com/Nafsgerman/cobol-ai-advisor)
-(original Explain/Modernize/Assess/Extract prompts), re-architected for the H0
-stack with the persistence + lineage layer added during the hackathon.
+
+Grew out of [cobol-ai-advisor](https://github.com/Nafsgerman/cobol-ai-advisor)
+(the original Explain / Modernize / Assess / Extract prompts), re-architected for
+the H0 stack with the persistence and lineage layer added during the hackathon.
